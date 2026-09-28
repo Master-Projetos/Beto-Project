@@ -1,21 +1,11 @@
-# Ambiente
-.venv/
-venv/
-.env
-.env.*
-
-# Python
-__pycache__/
-*.py[cod]
-.ruff_cache/
-.pytest_cache/
-
-# Build (PyInstaller)
-build/
+# Build (.NET)
+bin/
+obj/
 dist/
-*.spec
+*.user
+.vs/
 
-# Documentos de clientes e planilhas geradas
+# Client documents and generated spreadsheets
 docs/
 data/
 output/
@@ -27,10 +17,10 @@ output/
 templates/
 materials.json
 
-# Arquivos temporários do Office
+# Office temporary files
 ~$*
 
-# Editor / SO
+# Editor / OS
 .vscode/
 .idea/
 Thumbs.db
