@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ListaMateriais</AssemblyName>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <RootNamespace>ListaMateriais</RootNamespace>
     <Version>0.0.1</Version>
     <Authors>Eduardo</Authors>
@@ -17,8 +18,22 @@
     <Deterministic>true</Deterministic>
   </PropertyGroup>
 
+  <!-- The default template goes inside the executable, so it works without the templates/ folder.
+       templates/ is not versioned (client data); without it the build still works, with no default. -->
+  <PropertyGroup>
+    <DefaultTemplate>$(MSBuildThisFileDirectory)..\..\templates\lista_materiais.xlsx</DefaultTemplate>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(DefaultTemplate)')">
+    <EmbeddedResource Include="$(DefaultTemplate)" LogicalName="ListaMateriais.lista_materiais.xlsx" Link="templates\lista_materiais.xlsx" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="ListaMateriais.Tests" />
+  </ItemGroup>
+
+  <!-- The window's title bar icon is loaded from here; the exe icon (ApplicationIcon) is not used by the form. -->
+  <ItemGroup>
+    <EmbeddedResource Include="app.ico" LogicalName="app.ico" />
   </ItemGroup>
 
 </Project>

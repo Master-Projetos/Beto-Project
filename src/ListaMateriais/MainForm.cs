@@ -1,4 +1,7 @@
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace ListaMateriais;
 
@@ -8,24 +11,39 @@ internal sealed class MainForm : Form
     private const int FormHeight = 540;
     private const int Pad = 16;
     private const int WrapWidth = FormWidth - 60;
+    private const string AppTitle = "Preguiça App";
 
     private static readonly Font TitleFont = new("Segoe UI", 14, FontStyle.Bold);
     private static readonly Font BoldFont = new("Segoe UI", 10, FontStyle.Bold);
     private static readonly Font BigButtonFont = new("Segoe UI", 11, FontStyle.Bold);
+    private static readonly Font ListFont = new("Segoe UI", 10);
     private static readonly Color Muted = Color.FromArgb(0x66, 0x66, 0x66);
 
     private string? _docxPath;
     private string? _templatePath;
+    private bool _busy;
 
-    private readonly Label _docxName = MutedLabel("Nenhum documento selecionado");
+    private readonly Label _docxName = MutedLabel("Nenhum documento selecionado. Você também pode arrastar o arquivo para cá.");
     private readonly Label _templateName = new() { AutoSize = true, Font = BoldFont };
     private readonly Label _templateFull = MutedLabel(string.Empty);
     private readonly Button _generateButton;
+    private readonly Button _openTemplateButton = new() { Text = "Abrir modelo no Excel", Height = 30 };
+    private readonly Button _builtInTemplateButton = new() { Text = "Usar modelo padrão", Height = 30 };
     private readonly TextBox _result;
+    private readonly ListBox _headers = new() { Dock = DockStyle.Fill, IntegralHeight = false, Font = ListFont };
+    private readonly Label _headersFeedback = new() { AutoSize = true, MaximumSize = new Size(WrapWidth, 0) };
+    private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
+    private readonly TabPage _generateTab;
+    private readonly TabPage _templateTab;
+    private readonly TabPage _headersTab;
 
     public MainForm()
     {
-        Text = "Lista de Materiais";
+        Text = AppTitle;
+        using (var iconStream = typeof(MainForm).Assembly.GetManifestResourceStream("app.ico"))
+        {
+            if (iconStream is not null) Icon = new Icon(iconStream);
+        }
         Font = new Font("Segoe UI", 9);
         ClientSize = new Size(FormWidth, FormHeight);
         MinimumSize = Size;
@@ -50,12 +68,16 @@ internal sealed class MainForm : Form
             BackColor = SystemColors.Window,
         };
 
-        var tabs = new TabControl { Dock = DockStyle.Fill };
-        tabs.TabPages.Add(BuildGenerateTab());
-        tabs.TabPages.Add(BuildTemplateTab());
-        Controls.Add(tabs);
+        _generateTab = BuildGenerateTab();
+        _templateTab = BuildTemplateTab();
+        _headersTab = BuildHeadersTab();
+        _tabs.TabPages.AddRange([_generateTab, _templateTab, _headersTab, BuildSettingsTab()]);
+        Controls.Add(_tabs);
         Padding = new Padding(8);
 
+        // OLE drag and drop only works on an STA thread.
+        if (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA)
+            EnableDocxDrop(_generateTab);
         SetTemplate(Config.LoadTemplatePath(), save: false);
     }
 
@@ -82,6 +104,23 @@ internal sealed class MainForm : Form
         return panel;
     }
 
+    /// <summary>Controls side by side in equal columns.</summary>
+    private static TableLayoutPanel Row(int height, params Control[] controls)
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = controls.Length, RowCount = 1, Height = height,
+        };
+        for (var i = 0; i < controls.Length; i++)
+        {
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / controls.Length));
+            controls[i].Dock = DockStyle.Fill;
+            controls[i].Margin = new Padding(i == 0 ? 0 : 4, 0, i == controls.Length - 1 ? 0 : 4, 0);
+            panel.Controls.Add(controls[i], i, 0);
+        }
+        return panel;
+    }
+
     private TabPage BuildGenerateTab()
     {
         var chooseDocx = new Button { Text = "Selecionar documento...", Height = 30 };
@@ -103,12 +142,13 @@ internal sealed class MainForm : Form
     {
         var change = new Button { Text = "Trocar modelo...", Height = 30 };
         change.Click += (_, _) => ChooseTemplate();
-        var open = new Button { Text = "Abrir modelo no Excel", Height = 30 };
-        open.Click += (_, _) =>
+        _openTemplateButton.Click += (_, _) =>
         {
             if (_templatePath is not null)
                 OpenFile(_templatePath);
         };
+        _builtInTemplateButton.Enabled = Config.HasBuiltInTemplate;
+        _builtInTemplateButton.Click += (_, _) => UseBuiltInTemplate();
 
         var tab = new TabPage("Modelo") { Padding = new Padding(Pad) };
         tab.Controls.Add(Column(
@@ -119,9 +159,212 @@ internal sealed class MainForm : Form
             (_templateName, new Padding(0, 2, 0, 0), false),
             (_templateFull, new Padding(0, 0, 0, 16), false),
             (change, new Padding(0, 0, 0, 8), false),
-            (open, new Padding(0), false),
+            (_openTemplateButton, new Padding(0, 0, 0, 8), false),
+            (_builtInTemplateButton, new Padding(0), false),
             (new Panel(), new Padding(0), true)));
         return tab;
+    }
+
+    private TabPage BuildSettingsTab()
+    {
+        var current = Config.LoadOutputLayout();
+        var simplified = new RadioButton
+        {
+            Text = "Simplificada", Font = BoldFont, AutoSize = true, Checked = current == OutputLayout.Simplified,
+        };
+        var complete = new RadioButton
+        {
+            Text = "Completa", Font = BoldFont, AutoSize = true, Checked = current == OutputLayout.Complete,
+        };
+        var compact = new RadioButton
+        {
+            Text = "Compacta", Font = BoldFont, AutoSize = true, Checked = current == OutputLayout.Compact,
+        };
+        var hideEmpty = new CheckBox
+        {
+            Text = "Esconder também título e total das seções sem material", AutoSize = true,
+            Checked = Config.LoadHideEmptySections(), Enabled = current == OutputLayout.Compact,
+        };
+        var feedback = new Label { AutoSize = true, MaximumSize = new Size(WrapWidth, 0) };
+
+        void Save(OutputLayout layout)
+        {
+            try
+            {
+                Config.SaveOutputLayout(layout);
+                feedback.Text = "Salvo. Vale para as próximas planilhas.";
+                feedback.ForeColor = Color.SeaGreen;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Trace.TraceWarning("Não foi possível salvar as configurações: {0}", e.Message);
+                feedback.Text = $"Não foi possível salvar a configuração: {e.Message}";
+                feedback.ForeColor = Color.Firebrick;
+            }
+        }
+
+        simplified.CheckedChanged += (_, _) =>
+        {
+            if (simplified.Checked)
+                Save(OutputLayout.Simplified);
+        };
+        complete.CheckedChanged += (_, _) =>
+        {
+            if (complete.Checked)
+                Save(OutputLayout.Complete);
+        };
+        compact.CheckedChanged += (_, _) =>
+        {
+            hideEmpty.Enabled = compact.Checked;
+            if (compact.Checked)
+                Save(OutputLayout.Compact);
+        };
+        hideEmpty.CheckedChanged += (_, _) =>
+        {
+            try
+            {
+                Config.SaveHideEmptySections(hideEmpty.Checked);
+                feedback.Text = "Salvo. Vale para as próximas planilhas.";
+                feedback.ForeColor = Color.SeaGreen;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Trace.TraceWarning("Não foi possível salvar as configurações: {0}", e.Message);
+                feedback.Text = $"Não foi possível salvar a configuração: {e.Message}";
+                feedback.ForeColor = Color.Firebrick;
+            }
+        };
+
+        var tab = new TabPage("Configurações") { Padding = new Padding(Pad) };
+        tab.Controls.Add(Column(
+            (new Label { Text = "Configurações", Font = TitleFont, AutoSize = true }, new Padding(0), false),
+            (MutedLabel("Escolha como a planilha é gerada. Nas duas, os valores ficam centralizados " +
+                        "(menos a descrição dos materiais)."), new Padding(0, 2, 0, 16), false),
+            (new Label { Text = "Tipo de planilha", AutoSize = true }, new Padding(0, 0, 0, 6), false),
+            (simplified, new Padding(0), false),
+            (MutedLabel("Só os materiais do documento, em uma lista única com o total no fim."),
+                new Padding(18, 0, 0, 12), false),
+            (complete, new Padding(0), false),
+            (MutedLabel("A lista inteira do modelo, com as seções e o total de cada uma. Os materiais que " +
+                        "não estão no documento ficam com quantidade 0."), new Padding(18, 0, 0, 12), false),
+            (compact, new Padding(0), false),
+            (MutedLabel("Mantém as seções e o total de cada uma, mas oculta os materiais que não estão " +
+                        "no documento. Dá para reexibir as linhas no Excel."), new Padding(18, 0, 0, 4), false),
+            (hideEmpty, new Padding(18, 0, 0, 12), false),
+            (feedback, new Padding(0), false),
+            (new Panel(), new Padding(0), true)));
+        return tab;
+    }
+
+    private TabPage BuildHeadersTab()
+    {
+        ShowHeaders(Config.LoadTableTitles());
+
+        var input = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Font = ListFont,
+            PlaceholderText = "Ex.: LISTA DE MATERIAIS",
+            Margin = new Padding(0, 0, 8, 0),
+        };
+        var add = new Button { Text = "+ Adicionar", Dock = DockStyle.Fill, Margin = new Padding(0) };
+        var remove = new Button { Text = "Remover selecionado", Enabled = false };
+        var restore = new Button { Text = "Restaurar padrão" };
+
+        var inputRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Height = 32 };
+        inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        inputRow.Controls.Add(input, 0, 0);
+        inputRow.Controls.Add(add, 1, 0);
+
+        void AddHeader()
+        {
+            var title = Config.Normalize(input.Text);
+            if (title.Length == 0)
+            {
+                SayHeaders("Digite o título da tabela antes de adicionar.", Color.Firebrick);
+                input.Focus();
+                return;
+            }
+            if (_headers.Items.Contains(title))
+                SayHeaders($"\"{title}\" já está na lista.", Color.Firebrick);
+            else if (SaveHeaders([.. _headers.Items.Cast<string>(), title]))
+                SayHeaders($"\"{title}\" adicionado.", Color.SeaGreen);
+            input.Clear();
+            input.Focus();
+        }
+
+        add.Click += (_, _) => AddHeader();
+        input.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Enter)
+                return;
+            e.SuppressKeyPress = true;
+            AddHeader();
+        };
+        _headers.SelectedIndexChanged += (_, _) => remove.Enabled = _headers.SelectedIndex >= 0;
+        remove.Click += (_, _) =>
+        {
+            if (_headers.SelectedItem is not string title)
+                return;
+            if (SaveHeaders([.. _headers.Items.Cast<string>().Where(t => t != title)]))
+                SayHeaders($"\"{title}\" removido.", Muted);
+        };
+        restore.Click += (_, _) =>
+        {
+            if (Ask("Substituir a lista pelos cabeçalhos que vêm com o programa?\n\n" +
+                    string.Join("\n", Config.DefaultTableTitles.Select(t => "• " + t)),
+                    "Restaurar padrão", MessageBoxIcon.Question) && SaveHeaders(Config.DefaultTableTitles))
+                SayHeaders("Lista padrão restaurada.", Color.SeaGreen);
+        };
+
+        var tab = new TabPage("Cabeçalhos") { Padding = new Padding(Pad) };
+        tab.Controls.Add(Column(
+            (new Label { Text = "Cabeçalhos procurados", Font = TitleFont, AutoSize = true }, new Padding(0), false),
+            (MutedLabel("Ao gerar, o programa mostra todas as tabelas do documento. As que têm o título " +
+                        "(primeira célula) nesta lista já vêm marcadas; as outras você marca na hora."),
+                new Padding(0, 2, 0, 16), false),
+            (new Label { Text = "Novo cabeçalho", Font = BoldFont, AutoSize = true }, new Padding(0, 0, 0, 4), false),
+            (inputRow, new Padding(0), false),
+            (_headersFeedback, new Padding(0, 4, 0, 12), false),
+            (new Label { Text = "Cabeçalhos cadastrados", Font = BoldFont, AutoSize = true },
+                new Padding(0, 0, 0, 4), false),
+            (_headers, new Padding(0, 0, 0, 8), true),
+            (Row(30, remove, restore), new Padding(0), false)));
+        return tab;
+    }
+
+    private void ShowHeaders(IEnumerable<string> titles)
+    {
+        _headers.BeginUpdate();
+        _headers.Items.Clear();
+        foreach (var title in titles)
+            _headers.Items.Add(title);
+        _headers.EndUpdate();
+    }
+
+    private void SayHeaders(string text, Color color)
+    {
+        _headersFeedback.Text = text;
+        _headersFeedback.ForeColor = color;
+    }
+
+    /// <summary>Saves and shows the header list; on failure keeps the list as it was.</summary>
+    private bool SaveHeaders(IReadOnlyList<string> titles)
+    {
+        try
+        {
+            Config.SaveTableTitles(titles);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning("Não foi possível salvar as configurações: {0}", e.Message);
+            ShowError($"Não foi possível salvar a lista de cabeçalhos em:\n{Config.SettingsFile}\n\n" +
+                      $"Detalhe: {e.Message}");
+            return false;
+        }
+        ShowHeaders(Config.LoadTableTitles());
+        return true;
     }
 
     private void SetTemplate(string? path, bool save = true)
@@ -130,12 +373,16 @@ internal sealed class MainForm : Form
         {
             _templatePath = null;
             _templateName.Text = "Nenhum modelo selecionado";
-            _templateFull.Text = "Clique em \"Trocar modelo...\" para escolher.";
+            _templateFull.Text = "Clique em \"Trocar modelo...\" para escolher a planilha base.";
+            _openTemplateButton.Enabled = false;
             return;
         }
         _templatePath = Path.GetFullPath(path);
-        _templateName.Text = Path.GetFileName(_templatePath);
+        _templateName.Text = Config.IsBuiltInTemplate(_templatePath)
+            ? "Modelo padrão do programa"
+            : Path.GetFileName(_templatePath);
         _templateFull.Text = _templatePath;
+        _openTemplateButton.Enabled = true;
         if (save)
         {
             try
@@ -149,6 +396,34 @@ internal sealed class MainForm : Form
         }
     }
 
+    /// <summary>Switches to the template built into the executable, unpacking it when needed.</summary>
+    private void UseBuiltInTemplate()
+    {
+        try
+        {
+            var unpack = !File.Exists(Config.BuiltInTemplateFile);
+            if (!unpack && Config.BuiltInTemplateWasEdited())
+            {
+                var answer = MessageBox.Show(this,
+                    "O modelo padrão foi alterado depois de instalado.\n\n" +
+                    "Sim: voltar ao modelo original do programa (as alterações serão perdidas).\n" +
+                    "Não: usar o modelo padrão com as suas alterações.",
+                    "Modelo padrão", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (answer == DialogResult.Cancel)
+                    return;
+                unpack = answer == DialogResult.Yes;
+            }
+            SetTemplate(unpack ? Config.UnpackBuiltInTemplate() : Config.BuiltInTemplateFile);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning("Não foi possível extrair o modelo padrão: {0}", e.Message);
+            ShowWarning($"Não foi possível preparar o modelo padrão em:\n{Config.BuiltInTemplateFile}\n\n" +
+                        "Se ele estiver aberto no Excel, feche-o e tente de novo.\n\n" +
+                        $"Detalhe: {e.Message}", "Modelo padrão");
+        }
+    }
+
     private bool ChooseTemplate()
     {
         using var dialog = new OpenFileDialog
@@ -159,6 +434,15 @@ internal sealed class MainForm : Form
         };
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return false;
+        try
+        {
+            XlsxWriter.CheckTemplate(dialog.FileName);
+        }
+        catch (AppException e)
+        {
+            ShowWarning(e.Message, "Modelo inválido");
+            return false;
+        }
         SetTemplate(dialog.FileName);
         return true;
     }
@@ -169,13 +453,55 @@ internal sealed class MainForm : Form
         {
             Title = "Selecione o documento",
             Filter = "Documento Word (*.docx)|*.docx",
+            InitialDirectory = _docxPath is null ? "" : Path.GetDirectoryName(_docxPath),
         };
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            SetDocx(dialog.FileName);
+    }
+
+    private void SetDocx(string path)
+    {
+        if (Path.GetFileName(path).StartsWith("~$", StringComparison.Ordinal))
+        {
+            ShowWarning("Esse é um arquivo temporário que o Word cria enquanto o documento está aberto.\n\n" +
+                        "Selecione o documento original (sem \"~$\" no início do nome).", "Documento");
             return;
-        _docxPath = dialog.FileName;
+        }
+        if (!path.EndsWith(".docx", StringComparison.OrdinalIgnoreCase))
+        {
+            ShowWarning($"\"{Path.GetFileName(path)}\" não é um documento .docx.\n\n" +
+                        "Se for um arquivo .doc antigo, abra no Word e use Salvar como > Documento do Word (*.docx).",
+                "Documento");
+            return;
+        }
+        _docxPath = path;
         _docxName.Text = Path.GetFileName(_docxPath);
         _generateButton.Enabled = true;
         _result.Text = string.Empty;
+    }
+
+    /// <summary>Accepts a .docx dropped anywhere on the control or its children.</summary>
+    private void EnableDocxDrop(Control control)
+    {
+        control.AllowDrop = true;
+        control.DragEnter += (_, e) =>
+            e.Effect = e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: 1 } ? DragDropEffects.Copy
+                : DragDropEffects.None;
+        control.DragDrop += (_, e) =>
+        {
+            if (e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: 1 } files && !_busy)
+                SetDocx(files[0]);
+        };
+        foreach (Control child in control.Controls)
+            EnableDocxDrop(child);
+    }
+
+    private void SetBusy(bool busy)
+    {
+        _busy = busy;
+        _generateButton.Enabled = !busy;
+        _generateButton.Text = busy ? "Gerando..." : "Gerar planilha";
+        UseWaitCursor = busy;
     }
 
     private async void Generate()
@@ -183,78 +509,204 @@ internal sealed class MainForm : Form
         if (_docxPath is null)
             return;
         if (_templatePath is null || !File.Exists(_templatePath))
+            SetTemplate(Config.LoadTemplatePath(), save: false);
+        if (_templatePath is null || !File.Exists(_templatePath))
         {
-            MessageBox.Show(this, "Nenhum modelo encontrado. Selecione a planilha modelo.", "Modelo",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ShowInfo(_templatePath is null
+                    ? "Nenhum modelo de planilha foi configurado. Selecione a planilha modelo."
+                    : $"O modelo \"{Path.GetFileName(_templatePath)}\" não foi encontrado em:\n" +
+                      $"{Path.GetDirectoryName(_templatePath)}\n\nSelecione a planilha modelo.",
+                "Modelo");
             if (!ChooseTemplate())
                 return;
         }
 
-        string output;
-        using (var dialog = new SaveFileDialog
-               {
-                   Title = "Salvar planilha",
-                   InitialDirectory = Path.GetDirectoryName(_docxPath),
-                   FileName = $"{Path.GetFileNameWithoutExtension(_docxPath)}_materiais.xlsx",
-                   DefaultExt = "xlsx",
-                   Filter = "Planilha Excel (*.xlsx)|*.xlsx",
-               })
-        {
-            if (dialog.ShowDialog(this) != DialogResult.OK)
-                return;
-            output = dialog.FileName;
-        }
-
         var docx = _docxPath;
         var template = _templatePath!;
-        _generateButton.Enabled = false;
-        UseWaitCursor = true;
+        SetBusy(true);
+        _result.Text = "Lendo o documento...";
         try
         {
-            var (materials, added) = await Task.Run(() =>
+            var content = await Task.Run(() => DocxReader.Read(docx));
+            if (content.Tables.Count == 0)
             {
-                var read = DocxReader.ReadMaterials(docx);
-                return read.Count == 0 ? (read, (IReadOnlyList<string>)[]) : (read, XlsxWriter.Fill(read, output, template));
-            });
-
-            if (materials.Count == 0)
-            {
-                MessageBox.Show(this, "Nenhuma tabela de MATERIAL foi encontrada no documento.", "Nada encontrado",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _result.Text = NothingFoundMessage(content);
+                ShowWarning(_result.Text.Replace("\r\n", "\n"), "Nada encontrado");
                 return;
             }
 
-            var message = $"{materials.Count} materiais processados.\r\n" +
-                          $"{materials.Count - added.Count} encontrados no modelo.\r\n\r\n" +
-                          $"Salvo em:\r\n{output}";
-            if (added.Count > 0)
-                message += "\r\n\r\nAdicionados como novas linhas (sem código Protheus):\r\n- " +
-                           string.Join("\r\n- ", added);
-            _result.Text = message;
+            _result.Text = "Escolha as tabelas...";
+            if (ChooseTables(content.Tables) is not var (tables, sum))
+            {
+                _result.Text = string.Empty;
+                return;
+            }
+            var groups = MaterialGroups.Group(tables);
+            var materials = MaterialGroups.Combine(groups, sum);
 
-            if (MessageBox.Show(this, "Planilha gerada. Abrir agora?", "Concluído",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            if (AskOutput(docx) is not { } chosen)
+            {
+                _result.Text = string.Empty;
+                return;
+            }
+            // A file open in Excel cannot be replaced, so the spreadsheet gets the next free name instead.
+            var output = Files.IsLocked(chosen) ? Files.FreeName(chosen) : chosen;
+            var renamed = output != chosen
+                ? $"\"{Path.GetFileName(chosen)}\" está aberta no Excel, então a planilha foi salva como " +
+                  $"\"{Path.GetFileName(output)}\"."
+                : null;
+
+            _result.Text = "Gerando a planilha...";
+            var layout = Config.LoadOutputLayout();
+            var hideEmpty = Config.LoadHideEmptySections();
+            var added = await Task.Run(() =>
+                XlsxWriter.Fill(materials, content.Info, output, template, layout, hideEmpty));
+
+            _result.Text = SummaryMessage(content, tables, groups, materials, sum, added, output, layout);
+            if (renamed is not null)
+                _result.Text = renamed + "\r\n\r\n" + _result.Text;
+            if (Ask(renamed is null ? "Planilha gerada. Abrir agora?" : $"Planilha gerada.\n\n{renamed}\n\nAbrir agora?",
+                    "Concluído", MessageBoxIcon.Information))
                 OpenFile(output);
         }
-        catch (Exception e) when (e is UnauthorizedAccessException or IOException and not FileNotFoundException
-                                      and not DirectoryNotFoundException)
+        catch (AppException e)
         {
-            MessageBox.Show(this, "Não foi possível salvar. Feche a planilha se ela estiver aberta no Excel.",
-                "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Trace.TraceWarning("Falha ao gerar planilha: {0}", e.InnerException ?? e);
+            _result.Text = "Não foi possível gerar a planilha.\r\n\r\n" + e.Message.Replace("\n", "\r\n");
+            ShowWarning(e.Message, "Não foi possível gerar");
         }
         catch (Exception e)
         {
             Trace.TraceError("Falha ao gerar planilha: {0}", e);
-            MessageBox.Show(this, $"Falha ao gerar planilha:\n{e.Message}", "Erro",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _result.Text = $"Erro inesperado: {e.Message}";
+            ShowError("Ocorreu um erro inesperado ao gerar a planilha.\n\n" +
+                      $"Detalhe: {e.Message}\n\n" +
+                      "Se continuar acontecendo, envie este documento e o modelo para quem mantém o programa.");
         }
         finally
         {
-            UseWaitCursor = false;
-            _generateButton.Enabled = true;
+            SetBusy(false);
         }
     }
 
-    private static void OpenFile(string path) =>
-        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true })?.Dispose();
+    /// <summary>
+    /// Shows the tables found so the user picks the ones to use. Remembers newly checked
+    /// titles when asked. Null when cancelled.
+    /// </summary>
+    private (IReadOnlyList<MaterialTable> Tables, bool Sum)? ChooseTables(IReadOnlyList<MaterialTable> tables)
+    {
+        var registered = Config.LoadTableTitles();
+        using var picker = new TableSelectionForm(tables, registered);
+        if (picker.ShowDialog(this) != DialogResult.OK)
+            return null;
+
+        var remember = picker.TitlesToRemember;
+        if (remember.Count > 0 && SaveHeaders([.. registered, .. remember]))
+            SayHeaders($"{remember.Count} cabeçalho(s) adicionado(s) a partir do documento.", Color.SeaGreen);
+        return (picker.Selected, picker.Sum);
+    }
+
+    private static string NothingFoundMessage(DocxContent content)
+    {
+        var message = content.EmbeddedWorkbooks == 0
+            ? "O documento não tem nenhuma planilha do Excel incorporada.\r\n\r\n" +
+              "O programa lê apenas tabelas inseridas como objeto do Excel (Inserir > Tabela > Planilha do Excel), " +
+              "não tabelas comuns do Word."
+            : $"O documento tem {content.EmbeddedWorkbooks} planilha(s) do Excel, mas nenhuma parece uma lista " +
+              "de materiais.\r\n\r\n" +
+              "O programa espera o nome do material na primeira coluna e a quantidade (um número) na terceira.";
+        return AppendWarnings(message, content.Warnings);
+    }
+
+    private static string Quantity(double value) => value.ToString("0.###", CultureInfo.CurrentCulture);
+
+    private static string SummaryMessage(DocxContent content, IReadOnlyList<MaterialTable> tables,
+        IReadOnlyList<IReadOnlyList<Occurrence>> groups, OrderedDictionary<string, Material> materials,
+        bool summed, IReadOnlyList<string> added, string output, OutputLayout layout)
+    {
+        var kind = layout switch
+        {
+            OutputLayout.Complete => "completa (lista inteira do modelo)",
+            OutputLayout.Compact => "compacta (seções mantidas, materiais não usados ocultos)",
+            _ => "simplificada",
+        };
+        var message = $"Planilha {kind}.\r\n" +
+                      $"{materials.Count} materiais processados, de {tables.Count} tabela(s).\r\n" +
+                      $"{materials.Count - added.Count} encontrados no modelo.\r\n\r\n" +
+                      $"Salvo em:\r\n{output}";
+        if (added.Count > 0)
+            message += "\r\n\r\nAdicionados como novas linhas (sem código Protheus):\r\n- " +
+                       string.Join("\r\n- ", added);
+
+        var info = content.Info;
+        var missing = new List<string>();
+        if (info.Code is null)
+            missing.Add("código do projeto");
+        if (info.Date is null)
+            missing.Add("data");
+        if (info.City is null)
+            missing.Add("cidade");
+        if (missing.Count > 0)
+            message += $"\r\n\r\nNão encontrado no documento (preencha à mão): {string.Join(", ", missing)}.";
+
+        var repeated = groups.Where(g => g.Count > 1).ToList();
+        if (repeated.Count > 0)
+            message += $"\r\n\r\n{repeated.Count} material(is) repetido(s), " +
+                       (summed ? "com as quantidades somadas:" : "contado(s) só na primeira ocorrência:") +
+                       "\r\n- " + string.Join("\r\n- ", repeated.Select(g =>
+                           $"{g[0].Name}: {Quantity(summed ? g.Sum(o => o.Material.Quantity) : g[0].Material.Quantity)}"));
+
+        var unused = content.Tables.Except(tables).Select(t => t.Title).Distinct().ToList();
+        if (unused.Count > 0)
+            message += "\r\n\r\nTabelas não usadas:\r\n- " + string.Join("\r\n- ", unused);
+        return AppendWarnings(message, content.Warnings);
+    }
+
+    private static string AppendWarnings(string message, IReadOnlyList<string> warnings) =>
+        warnings.Count == 0 ? message : message + "\r\n\r\nAvisos:\r\n- " + string.Join("\r\n- ", warnings);
+
+    private string? AskOutput(string docx)
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Salvar planilha",
+            InitialDirectory = Path.GetDirectoryName(docx),
+            FileName = $"{OutputName(docx)}.xlsx",
+            DefaultExt = "xlsx",
+            Filter = "Planilha Excel (*.xlsx)|*.xlsx",
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+    }
+
+    /// <summary>Same name as the TCE document, with the leading TCE swapped for TCX.</summary>
+    private static string OutputName(string docxPath) =>
+        Regex.Replace(Path.GetFileNameWithoutExtension(docxPath), "^tce", m => m.Value == "tce" ? "tcx" : "TCX",
+            RegexOptions.IgnoreCase);
+
+    private void OpenFile(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception e) when (e is Win32Exception or InvalidOperationException or FileNotFoundException)
+        {
+            Trace.TraceWarning("Não foi possível abrir {0}: {1}", path, e.Message);
+            ShowWarning($"Não foi possível abrir \"{Path.GetFileName(path)}\".\n\n" +
+                        "Verifique se o Excel (ou outro programa para .xlsx) está instalado.\n\n" +
+                        $"Detalhe: {e.Message}", "Abrir arquivo");
+        }
+    }
+
+    private bool Ask(string text, string caption, MessageBoxIcon icon) =>
+        MessageBox.Show(this, text, caption, MessageBoxButtons.YesNo, icon) == DialogResult.Yes;
+
+    private void ShowInfo(string text, string caption) =>
+        MessageBox.Show(this, text, caption, MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+    private void ShowWarning(string text, string caption) =>
+        MessageBox.Show(this, text, caption, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+    private void ShowError(string text) =>
+        MessageBox.Show(this, text, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
 }

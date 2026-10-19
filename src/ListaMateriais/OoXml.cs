@@ -17,6 +17,7 @@ internal static class OoXml
     public const long MaxPartBytes = 100L * 1024 * 1024;
 
     public static readonly XNamespace Main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    public static readonly XNamespace Word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     public static readonly XNamespace PackageRels = "http://schemas.openxmlformats.org/package/2006/relationships";
     public static readonly XNamespace OfficeRels = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     public static readonly XNamespace ContentTypes = "http://schemas.openxmlformats.org/package/2006/content-types";
