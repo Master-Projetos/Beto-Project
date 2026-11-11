@@ -17,21 +17,45 @@ internal static partial class PdfReader
 {
     private const double PriceTolerance = 0.02;
 
-    /// <summary>Reads every category of the report as a material table.</summary>
+    /// <summary>
+    /// Reads the material tables of a PDF: the categories of the Route Map report or, when the PDF is
+    /// a TCE/TCR saved from Word, its material tables (<see cref="DocumentContent.Report"/> is null then).
+    /// </summary>
     public static DocumentContent Read(string pdfPath)
     {
         var name = Path.GetFileName(pdfPath);
         try
         {
             using var pdf = PdfDocument.Open(Files.ReadAllBytesShared(pdfPath));
+            var pages = pdf.GetPages().ToList();
             // Content order keeps a wrapped material name together with its quantity and prices.
-            var lines = pdf.GetPages()
+            var lines = pages
                 .SelectMany(page => ContentOrderTextExtractor.GetText(page).Split('\n'))
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
                 .ToList();
             var content = Parse(lines);
-            return content.Report is { } report ? content with { Report = report with { Map = ReadMap(pdf) } } : content;
+            if (content.Tables.Count > 0)
+                return content with { Report = content.Report! with { Map = ReadMap(pdf) } };
+
+            // Not the Route Map report: a TCE/TCR saved from Word. Its tables are rebuilt from where the
+            // words sit on the page; whichever reading finds more materials wins.
+            var titles = Config.LoadTableTitles();
+            var byPosition = TcePdfParser.Parse(LinesByPosition(pages), name, titles);
+            var byContent = TcePdfParser.Parse(lines, name, titles);
+            var best = Items(byContent) > Items(byPosition) ? byContent : byPosition;
+            if (best.Tables.Count > 0)
+                return best;
+
+            var hasPictures = pages.Any(page => page.GetImages().Any());
+            return best with
+            {
+                Warnings = lines.Count < 5
+                    ? ["O PDF não tem texto selecionável (parece digitalizado ou salvo como imagem)."]
+                    : hasPictures
+                        ? ["As tabelas deste PDF podem estar como imagem, sem texto para ler."]
+                        : [],
+            };
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -53,7 +77,58 @@ internal static partial class PdfReader
         }
     }
 
-    /// <summary>Parses the text lines of the whole report, in reading order.</summary>
+    private static int Items(DocumentContent content) => content.Tables.Sum(t => t.Items.Count);
+
+    /// <summary>The words of every page grouped into lines by their baseline, each line left to right.</summary>
+    private static List<TextLine> LinesByPosition(IReadOnlyList<UglyToad.PdfPig.Content.Page> pages)
+    {
+        var lines = new List<TextLine>();
+        for (var number = 0; number < pages.Count; number++)
+        {
+            var words = pages[number].GetWords()
+                .Where(w => w.Letters.Count > 0 && !string.IsNullOrWhiteSpace(w.Text))
+                .OrderByDescending(Baseline)
+                .ToList();
+
+            var line = new List<UglyToad.PdfPig.Content.Word>();
+            foreach (var word in words)
+            {
+                // Words of one line share the baseline; a centered cell next to a two-line name sits half a line off.
+                if (line.Count > 0 && Baseline(line[0]) - Baseline(word) > Math.Max(1.5, 0.3 * Size(word)))
+                {
+                    lines.Add(Line(line, number));
+                    line.Clear();
+                }
+                line.Add(word);
+            }
+            if (line.Count > 0)
+                lines.Add(Line(line, number));
+        }
+        return lines;
+
+        static double Baseline(UglyToad.PdfPig.Content.Word word) => word.Letters[0].StartBaseLine.Y;
+
+        static double Size(UglyToad.PdfPig.Content.Word word) => word.Letters[0].PointSize;
+
+        static TextLine Line(List<UglyToad.PdfPig.Content.Word> words, int page)
+        {
+            var text = new System.Text.StringBuilder();
+            var positions = new List<TextWord>();
+            foreach (var word in words.OrderBy(w => w.BoundingBox.Left))
+            {
+                var clean = string.Concat(word.Text.Where(c => !char.IsWhiteSpace(c)));
+                if (clean.Length == 0)
+                    continue;
+                if (text.Length > 0)
+                    text.Append(' ');
+                positions.Add(new TextWord(text.Length, word.BoundingBox.Left, word.BoundingBox.Right));
+                text.Append(clean);
+            }
+            return new TextLine(text.ToString(), page, Baseline(words[0]), words.Max(Size), positions);
+        }
+    }
+
+    /// <summary>Parses the text lines of the whole Route Map report, in reading order.</summary>
     internal static DocumentContent Parse(IReadOnlyList<string> lines)
     {
         var tables = new List<MaterialTable>();

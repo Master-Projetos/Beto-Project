@@ -103,6 +103,47 @@ internal static partial class Config
         File.WriteAllText(SettingsFile, json.ToJsonString());
     }
 
+    /// <summary>A saved value, or <paramref name="fallback"/> when it is missing or of another type.</summary>
+    private static T Read<T>(string key, T fallback)
+    {
+        try
+        {
+            return ReadSettings()[key] is { } node ? node.GetValue<T>() : fallback;
+        }
+        catch (Exception e) when (e is InvalidOperationException or FormatException)
+        {
+            return fallback;
+        }
+    }
+
+    private static TEnum ReadEnum<TEnum>(string key, TEnum fallback) where TEnum : struct, Enum =>
+        Enum.TryParse<TEnum>(Read<string?>(key, null), out var value) && Enum.IsDefined(value) ? value : fallback;
+
+    private static void Write(string key, JsonNode? value)
+    {
+        var json = ReadSettings();
+        json[key] = value;
+        WriteSettings(json);
+    }
+
+    /// <summary>
+    /// Runs a Save* method. A setting that cannot be written (read-only profile, disk full) is not worth
+    /// stopping the user for: the failure is logged and its message returned, null when it worked.
+    /// </summary>
+    public static string? TrySave(Action save)
+    {
+        try
+        {
+            save();
+            return null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning("Não foi possível salvar as configurações: {0}", e.Message);
+            return e.Message;
+        }
+    }
+
     private static string SettingsKey(bool pdf) => pdf ? "pdfHeaders" : "headers";
 
     /// <summary>Table headers to look for, normalized; defaults until the user saves a list.</summary>
@@ -140,17 +181,7 @@ internal static partial class Config
 
     public static string? LoadTemplatePath()
     {
-        string? saved = null;
-        try
-        {
-            saved = ReadSettings()["template"]?.GetValue<string>();
-        }
-        catch (Exception e) when (e is InvalidOperationException or FormatException)
-        {
-            saved = null;
-        }
-
-        foreach (var candidate in new[] { saved, Template })
+        foreach (var candidate in new[] { Read<string?>("template", null), Template })
         {
             if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))
                 return Path.GetFullPath(candidate);
@@ -203,15 +234,24 @@ internal static partial class Config
         return BuiltInTemplateFile;
     }
 
-    public static void SaveTemplatePath(string path)
-    {
-        var json = ReadSettings();
-        json["template"] = Path.GetFullPath(path);
-        WriteSettings(json);
-    }
+    public static void SaveTemplatePath(string path) => Write("template", Path.GetFullPath(path));
 
     public static readonly string TcrTemplate = Path.Combine(AppContext.BaseDirectory, "templates", "tcr.docx");
     public static readonly string TceTemplate = Path.Combine(AppContext.BaseDirectory, "templates", "tce.docx");
+
+    private static (string Key, string File, string Resource) WordTemplate(ReportKind kind) => kind == ReportKind.Tce
+        ? ("tceTemplate", TceTemplate, "ListaMateriais.tce.docx")
+        : ("tcrTemplate", TcrTemplate, "ListaMateriais.tcr.docx");
+
+    /// <summary>The Word template file in use (picked by the user, or next to the executable); null when there is none.</summary>
+    public static string? WordTemplatePath(ReportKind kind)
+    {
+        var (key, file, _) = WordTemplate(kind);
+        return new[] { Read<string?>(key, null), file }.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c) && File.Exists(c));
+    }
+
+    public static bool HasBuiltInWordTemplate(ReportKind kind) =>
+        typeof(Config).Assembly.GetManifestResourceInfo(WordTemplate(kind).Resource) is not null;
 
     /// <summary>
     /// The Word template of a report: the one picked by the user, the one next to the executable, or the
@@ -219,26 +259,10 @@ internal static partial class Config
     /// </summary>
     public static byte[]? LoadWordTemplate(ReportKind kind)
     {
-        var (key, file, resource) = kind == ReportKind.Tce
-            ? ("tceTemplate", TceTemplate, "ListaMateriais.tce.docx")
-            : ("tcrTemplate", TcrTemplate, "ListaMateriais.tcr.docx");
-        string? saved = null;
-        try
-        {
-            saved = ReadSettings()[key]?.GetValue<string>();
-        }
-        catch (Exception e) when (e is InvalidOperationException or FormatException)
-        {
-            saved = null;
-        }
+        if (WordTemplatePath(kind) is { } path)
+            return Files.ReadAllBytesShared(path);
 
-        foreach (var candidate in new[] { saved, file })
-        {
-            if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))
-                return Files.ReadAllBytesShared(candidate);
-        }
-
-        using var stream = typeof(Config).Assembly.GetManifestResourceStream(resource);
+        using var stream = typeof(Config).Assembly.GetManifestResourceStream(WordTemplate(kind).Resource);
         if (stream is null)
             return null;
         using var buffer = new MemoryStream();
@@ -246,101 +270,84 @@ internal static partial class Config
         return buffer.ToArray();
     }
 
-    public static void SaveWordTemplatePath(ReportKind kind, string path)
-    {
-        var json = ReadSettings();
-        json[kind == ReportKind.Tce ? "tceTemplate" : "tcrTemplate"] = Path.GetFullPath(path);
-        WriteSettings(json);
-    }
+    /// <param name="path">Null goes back to the template next to the executable or built into it.</param>
+    public static void SaveWordTemplatePath(ReportKind kind, string? path) =>
+        Write(WordTemplate(kind).Key, path is null ? null : Path.GetFullPath(path));
 
     /// <summary>What to generate from a PDF report; Word (TCR) until the user chooses otherwise.</summary>
-    public static PdfOutput LoadPdfOutput()
-    {
-        try
-        {
-            return Enum.TryParse<PdfOutput>(ReadSettings()["pdfOutput"]?.GetValue<string>(), out var output)
-                   && Enum.IsDefined(output)
-                ? output
-                : PdfOutput.Word;
-        }
-        catch (Exception e) when (e is InvalidOperationException or FormatException)
-        {
-            return PdfOutput.Word;
-        }
-    }
+    public static PdfOutput LoadPdfOutput() => ReadEnum("pdfOutput", PdfOutput.Word);
 
-    public static void SavePdfOutput(PdfOutput output)
-    {
-        var json = ReadSettings();
-        json["pdfOutput"] = output.ToString();
-        WriteSettings(json);
-    }
+    public static void SavePdfOutput(PdfOutput output) => Write("pdfOutput", output.ToString());
 
     /// <summary>
     /// Whether the highlighted spots of the Word template that the app could not fill are asked for
     /// when generating (true) or left highlighted to be typed in Word (false).
     /// </summary>
-    public static bool LoadAskPlaceholders()
-    {
-        try
-        {
-            return ReadSettings()["askPlaceholders"]?.GetValue<bool>() ?? true;
-        }
-        catch (Exception e) when (e is InvalidOperationException or FormatException)
-        {
-            return true;
-        }
-    }
+    public static bool LoadAskPlaceholders() => Read("askPlaceholders", true);
 
-    public static void SaveAskPlaceholders(bool ask)
-    {
-        var json = ReadSettings();
-        json["askPlaceholders"] = ask;
-        WriteSettings(json);
-    }
+    public static void SaveAskPlaceholders(bool ask) => Write("askPlaceholders", ask);
 
-    public static OutputLayout LoadOutputLayout()
-    {
-        try
-        {
-            return Enum.TryParse<OutputLayout>(ReadSettings()["layout"]?.GetValue<string>(), out var layout)
-                   && Enum.IsDefined(layout)
-                ? layout
-                : OutputLayout.Simplified;
-        }
-        catch (Exception e) when (e is InvalidOperationException or FormatException)
-        {
-            return OutputLayout.Simplified;
-        }
-    }
+    public static OutputLayout LoadOutputLayout() => ReadEnum("layout", OutputLayout.Simplified);
 
-    public static void SaveOutputLayout(OutputLayout layout)
-    {
-        var json = ReadSettings();
-        json["layout"] = layout.ToString();
-        WriteSettings(json);
-    }
+    public static void SaveOutputLayout(OutputLayout layout) => Write("layout", layout.ToString());
 
     /// <summary>Compact layout: also hide the title and TOTAL of sections with no material.</summary>
-    public static bool LoadHideEmptySections()
+    public static bool LoadHideEmptySections() => Read("hideEmptySections", false);
+
+    public static void SaveHideEmptySections(bool hide) => Write("hideEmptySections", hide);
+
+    /// <summary>How the placemarks of the last KMZ looked, to start the next one the same way.</summary>
+    public static KmzOptions LoadKmzOptions()
     {
+        var defaults = new KmzOptions();
         try
         {
-            return ReadSettings()["hideEmptySections"]?.GetValue<bool>() ?? false;
+            if (ReadSettings()["kmz"] is not JsonObject saved)
+                return defaults;
+            return new KmzOptions(
+                Enum.TryParse<Kmz.MarkerShape>(saved["shape"]?.GetValue<string>(), out var shape) && Enum.IsDefined(shape)
+                    ? shape : defaults.Shape,
+                saved["color"]?.GetValue<int>() ?? defaults.Color,
+                saved["size"]?.GetValue<int>() is { } size and >= 0 and <= 2 ? size : defaults.Size,
+                saved["longitudeFirst"]?.GetValue<bool>() ?? defaults.LongitudeFirst);
         }
         catch (Exception e) when (e is InvalidOperationException or FormatException)
         {
-            return false;
+            return defaults;
         }
     }
 
-    public static void SaveHideEmptySections(bool hide)
+    public static void SaveKmzOptions(KmzOptions options) => Write("kmz", new JsonObject
     {
-        var json = ReadSettings();
-        json["hideEmptySections"] = hide;
-        WriteSettings(json);
+        ["shape"] = options.Shape.ToString(),
+        ["color"] = options.Color,
+        ["size"] = options.Size,
+        ["longitudeFirst"] = options.LongitudeFirst,
+    });
+
+    /// <summary>Where the window was when the app closed: left, top, width, height and whether it was maximized.</summary>
+    public static (int Left, int Top, int Width, int Height, bool Maximized)? LoadWindow()
+    {
+        try
+        {
+            return ReadSettings()["window"] is JsonArray { Count: 5 } w && w.All(n => n is not null)
+                ? (w[0]!.GetValue<int>(), w[1]!.GetValue<int>(), w[2]!.GetValue<int>(), w[3]!.GetValue<int>(), w[4]!.GetValue<bool>())
+                : null;
+        }
+        catch (Exception e) when (e is InvalidOperationException or FormatException)
+        {
+            return null;
+        }
     }
+
+    public static void SaveWindow(int left, int top, int width, int height, bool maximized) =>
+        Write("window", new JsonArray(left, top, width, height, maximized));
 }
+
+/// <param name="Color">RGB of the marker, as 0xRRGGBB.</param>
+/// <param name="Size">0 small, 1 medium, 2 large.</param>
+internal sealed record KmzOptions(Kmz.MarkerShape Shape = Kmz.MarkerShape.Pin, int Color = 0xE53935, int Size = 1,
+    bool LongitudeFirst = false);
 
 internal enum PdfOutput
 {

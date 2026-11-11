@@ -54,7 +54,7 @@ internal static partial class XlsxWriter
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
         {
             throw new AppException($"O modelo \"{name}\" não foi encontrado.\n\n" +
-                                   "Ele pode ter sido movido ou excluído. Escolha o modelo na aba \"Modelo\".", e);
+                                   "Ele pode ter sido movido ou excluído. Escolha o modelo na página \"Modelos\".", e);
         }
         catch (UnauthorizedAccessException e)
         {
@@ -76,7 +76,7 @@ internal static partial class XlsxWriter
         {
             throw new AppException($"O modelo \"{name}\" não é uma planilha .xlsx válida ou está corrompido.\n\n" +
                                    $"Detalhe: {e.Message}\n\n" +
-                                   "Escolha outro modelo na aba \"Modelo\".", e);
+                                   "Escolha outro modelo na página \"Modelos\".", e);
         }
     }
 

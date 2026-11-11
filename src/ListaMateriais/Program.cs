@@ -17,12 +17,10 @@ internal static class Program
     private static void ShowCrash(Exception? e)
     {
         Trace.TraceError("Erro não tratado: {0}", e);
-        MessageBox.Show(
-            e is AppException
-                ? e.Message
-                : "Ocorreu um erro inesperado.\n\n" +
-                  $"Detalhe: {e?.Message ?? "desconhecido"}\n\n" +
-                  "Se continuar acontecendo, feche e abra o programa novamente.",
-            "Preguiça App", MessageBoxButtons.OK, e is AppException ? MessageBoxIcon.Warning : MessageBoxIcon.Error);
+        if (e is AppException)
+            Dialogs.Warn(null, "Não foi possível concluir", e.Message);
+        else
+            Dialogs.Error(null, "Ocorreu um erro inesperado", "Se continuar acontecendo, feche e abra o programa novamente.",
+                e?.ToString());
     }
 }

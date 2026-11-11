@@ -113,7 +113,7 @@ internal sealed class TableSelectionForm : Form
         layout.Controls.Add(new Label
         {
             Text = "Marque as tabelas que devem ser lidas. Clique no nome de uma tabela para ver os itens dela. " +
-                   "\"(nova)\" indica um título que não está na aba Cabeçalhos.",
+                   "\"(nova)\" indica um título que não está na página Cabeçalhos.",
             MaximumSize = new Size(720, 0),
             AutoSize = true, ForeColor = Muted, Margin = new Padding(0, 2, 0, 12),
         }, 0, 1);
