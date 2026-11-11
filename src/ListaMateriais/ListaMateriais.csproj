@@ -9,7 +9,7 @@
     <AssemblyName>ListaMateriais</AssemblyName>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <RootNamespace>ListaMateriais</RootNamespace>
-    <Version>0.0.1</Version>
+    <Version>2.0.0</Version>
     <Authors>Eduardo</Authors>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <SatelliteResourceLanguages>pt-BR</SatelliteResourceLanguages>
@@ -27,6 +27,21 @@
     <EmbeddedResource Include="$(DefaultTemplate)" LogicalName="ListaMateriais.lista_materiais.xlsx" Link="templates\lista_materiais.xlsx" />
   </ItemGroup>
 
+  <!-- Same for the TCR Word template used when the input is a PDF report. -->
+  <PropertyGroup>
+    <DefaultTcrTemplate>$(MSBuildThisFileDirectory)..\..\templates\tcr.docx</DefaultTcrTemplate>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(DefaultTcrTemplate)')">
+    <EmbeddedResource Include="$(DefaultTcrTemplate)" LogicalName="ListaMateriais.tcr.docx" Link="templates\tcr.docx" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <DefaultTceTemplate>$(MSBuildThisFileDirectory)..\..\templates\tce.docx</DefaultTceTemplate>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(DefaultTceTemplate)')">
+    <EmbeddedResource Include="$(DefaultTceTemplate)" LogicalName="ListaMateriais.tce.docx" Link="templates\tce.docx" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="ListaMateriais.Tests" />
   </ItemGroup>
@@ -34,6 +49,9 @@
   <!-- The window's title bar icon is loaded from here; the exe icon (ApplicationIcon) is not used by the form. -->
   <ItemGroup>
     <EmbeddedResource Include="app.ico" LogicalName="app.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="PdfPig" Version="0.1.14" />
   </ItemGroup>
 
 </Project>

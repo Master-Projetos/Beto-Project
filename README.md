@@ -10,6 +10,39 @@ MATERIAIS, INSTALAÇÃO CLIENTE, FERRAGENS, LANÇAMENTO DE CABOS, CAIXAS / SPLIT
 CENTER E POP - INDOOR (EQUIPAMENTOS PASSIVOS); the list can be edited in the "Cabeçalhos" tab,
 or extended right from the table list.
 
+## PDF report (v2)
+
+Besides the Word document, the app accepts the project report exported by Route Map as a PDF
+(`Relatorio_Rede_..._AAAA-MM-DD.pdf`; pick it or drag it onto the window). It reads the
+"LISTA DE MATERIAIS" section: every category (Ferragens, Cabos / Lançamento, Fusão, Data Center —
+Passivo / Ativo) becomes a table, with name, unit, quantity and unit price. Categories registered
+in the "Cabeçalhos" tab (choose "Relatório PDF" there; it has its own list, with these five by
+default) start checked; any other category found in the PDF is listed as "(nova)" and can be
+checked on the spot. The city and the date come from the report header; the PDF has no project code, so that
+cell is left to fill by hand. Each category's quantities × prices are checked against the
+subtotal printed in the PDF, and any mismatch is shown as a warning in the result.
+
+### Word (TCR) or spreadsheet from the PDF
+
+After picking a PDF, the "Gerar planilha" tab asks what to generate (the choice is remembered):
+
+- **Word (TCR)**: fills the TCR template with the report: designer (projetista), date, study
+  summary (ports, cost per port, city, launch, CAPEX, safety coefficient, deadline, labor), area
+  study (neighborhood, HP, HC, penetration rate), objective, scope, investment text, area, number of
+  poles and the cost chart. The tables are the template's own Excel objects: the app only
+  writes quantities and prices into them (and the cost summary); nothing is rebuilt as a Word table.
+  When Word is installed, each filled object is activated once so its picture shows the new values;
+  otherwise they appear after opening the object. Items missing from a template table are listed as
+  warnings. The labor objects stay as in the template, and the code on the cover and the map are not
+  in the PDF, so they are left to fill by hand.
+- **Word (TCE)**: same, using `templates/tce.docx` (summary, scope, investment text, poles, chart and
+  the material objects, including customer installation).
+- **Planilha (.xlsx)**: as described above.
+
+The TCR/TCE templates are built into the executable when `templates/tcr.docx` / `templates/tce.docx` exist at build time (same
+as `templates/lista_materiais.xlsx`); a file of the same name next to the executable takes precedence.
+If there is none, the app asks for the blank document the first time and remembers it.
+
 ## Requirements
 
 - Windows

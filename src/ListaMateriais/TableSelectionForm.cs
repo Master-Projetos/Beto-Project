@@ -35,6 +35,7 @@ internal sealed class TableSelectionForm : Form
         _registered = registered.ToHashSet(StringComparer.Ordinal);
 
         Text = "Tabelas encontradas";
+        AutoScaleMode = AutoScaleMode.Dpi;
         Font = new Font("Segoe UI", 9);
         ClientSize = new Size(760, 540);
         MinimumSize = new Size(560, 420);
@@ -44,6 +45,8 @@ internal sealed class TableSelectionForm : Form
         Padding = new Padding(16);
 
         var cancel = new Button { Text = "Cancelar", DialogResult = DialogResult.Cancel, Width = 110, Height = 30 };
+        Ui.Primary(_ok);
+        Ui.Secondary(cancel);
         AcceptButton = _ok;
         CancelButton = cancel;
 
@@ -106,7 +109,7 @@ internal sealed class TableSelectionForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         foreach (var fill in new[] { false, false, true, false, false, false, false })
             layout.RowStyles.Add(fill ? new RowStyle(SizeType.Percent, 100) : new RowStyle(SizeType.AutoSize));
-        layout.Controls.Add(new Label { Text = "Quais tabelas entram na planilha?", Font = TitleFont, AutoSize = true }, 0, 0);
+        layout.Controls.Add(new Label { Text = "Quais tabelas entram?", Font = TitleFont, AutoSize = true }, 0, 0);
         layout.Controls.Add(new Label
         {
             Text = "Marque as tabelas que devem ser lidas. Clique no nome de uma tabela para ver os itens dela. " +

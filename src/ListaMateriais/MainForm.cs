@@ -7,9 +7,10 @@ namespace ListaMateriais;
 
 internal sealed class MainForm : Form
 {
-    private const int FormWidth = 420;
-    private const int FormHeight = 540;
+    private const int FormWidth = 640;
+    private const int FormHeight = 800;
     private const int Pad = 16;
+    private const int ResultHeight = 170;
     private const int WrapWidth = FormWidth - 60;
     private const string AppTitle = "Preguiça App";
 
@@ -22,11 +23,22 @@ internal sealed class MainForm : Form
     private string? _docxPath;
     private string? _templatePath;
     private bool _busy;
+    private bool _headersPdf;
 
-    private readonly Label _docxName = MutedLabel("Nenhum documento selecionado. Você também pode arrastar o arquivo para cá.");
+    private readonly DropZone _drop = new();
+    private readonly ProgressBar _progress = new()
+    {
+        Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 25, Height = 5, Dock = DockStyle.Fill, Visible = false,
+    };
+    private readonly Button _openOutput = new() { Text = "Abrir arquivo", AutoSize = true, Enabled = false, Padding = new Padding(8, 2, 8, 2) };
+    private readonly Button _showOutput = new() { Text = "Mostrar na pasta", AutoSize = true, Enabled = false, Padding = new Padding(8, 2, 8, 2) };
+    private string? _lastOutput;
     private readonly Label _templateName = new() { AutoSize = true, Font = BoldFont };
     private readonly Label _templateFull = MutedLabel(string.Empty);
     private readonly Button _generateButton;
+    private FlowLayoutPanel? _pdfChoice;
+    private readonly RadioButton _pdfWord = new() { Text = "Word (TCR)", AutoSize = true, Font = BoldFont };
+    private readonly RadioButton _pdfTce = new() { Text = "Word (TCE)", AutoSize = true, Font = BoldFont };
     private readonly Button _openTemplateButton = new() { Text = "Abrir modelo no Excel", Height = 30 };
     private readonly Button _builtInTemplateButton = new() { Text = "Usar modelo padrão", Height = 30 };
     private readonly TextBox _result;
@@ -44,9 +56,11 @@ internal sealed class MainForm : Form
         {
             if (iconStream is not null) Icon = new Icon(iconStream);
         }
+        AutoScaleMode = AutoScaleMode.Dpi;
         Font = new Font("Segoe UI", 9);
         ClientSize = new Size(FormWidth, FormHeight);
-        MinimumSize = Size;
+        KeyPreview = true;
+        MinimumSize = SizeFromClientSize(new Size(420, 540));
         StartPosition = FormStartPosition.CenterScreen;
 
         _generateButton = new Button
@@ -54,10 +68,17 @@ internal sealed class MainForm : Form
             Text = "Gerar planilha",
             Font = BigButtonFont,
             Dock = DockStyle.Fill,
-            Height = 44,
+            Height = 46,
             Enabled = false,
         };
+        Ui.Primary(_generateButton);
         _generateButton.Click += (_, _) => Generate();
+        AcceptButton = _generateButton;
+        Ui.Secondary(_openOutput);
+        Ui.Secondary(_showOutput);
+        _openOutput.Click += (_, _) => { if (_lastOutput is not null) OpenFile(_lastOutput); };
+        _showOutput.Click += (_, _) => ShowInFolder();
+        _drop.Activated += (_, _) => ChooseDocx();
 
         _result = new TextBox
         {
@@ -66,12 +87,15 @@ internal sealed class MainForm : Form
             ScrollBars = ScrollBars.Vertical,
             Dock = DockStyle.Fill,
             BackColor = SystemColors.Window,
+            // Fixed height: the box never grows or shrinks with the text or the window.
+            MinimumSize = new Size(0, ResultHeight),
+            MaximumSize = new Size(0, ResultHeight),
         };
 
         _generateTab = BuildGenerateTab();
         _templateTab = BuildTemplateTab();
         _headersTab = BuildHeadersTab();
-        _tabs.TabPages.AddRange([_generateTab, _templateTab, _headersTab, BuildSettingsTab()]);
+        _tabs.TabPages.AddRange([_generateTab, _templateTab, _headersTab, BuildSettingsTab(), BuildCreditsTab()]);
         Controls.Add(_tabs);
         Padding = new Padding(8);
 
@@ -97,7 +121,7 @@ internal sealed class MainForm : Form
         {
             panel.RowStyles.Add(fill ? new RowStyle(SizeType.Percent, 100) : new RowStyle(SizeType.AutoSize));
             control.Margin = margin;
-            if (control is Button)
+            if (control is Button or DropZone)
                 control.Dock = DockStyle.Fill;
             panel.Controls.Add(control);
         }
@@ -123,19 +147,61 @@ internal sealed class MainForm : Form
 
     private TabPage BuildGenerateTab()
     {
-        var chooseDocx = new Button { Text = "Selecionar documento...", Height = 30 };
-        chooseDocx.Click += (_, _) => ChooseDocx();
-
-        var tab = new TabPage("Gerar planilha") { Padding = new Padding(Pad) };
+        // Everything fits at the default size; on a smaller window the tab scrolls instead of cutting the buttons.
+        var tab = new TabPage("Gerar") { Padding = new Padding(Pad), AutoScroll = true, AutoScrollMinSize = new Size(0, 700) };
+        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) };
+        actions.Controls.AddRange([_openOutput, _showOutput]);
         tab.Controls.Add(Column(
-            (new Label { Text = "Gerar lista de materiais", Font = TitleFont, AutoSize = true }, new Padding(0), false),
-            (MutedLabel("Selecione o documento Word com a tabela de materiais."), new Padding(0, 2, 0, 16), false),
-            (chooseDocx, new Padding(0), false),
-            (_docxName, new Padding(0, 6, 0, 16), false),
-            (_generateButton, new Padding(0), false),
-            (new Label { Text = "Resultado", AutoSize = true }, new Padding(0, 20, 0, 4), false),
-            (_result, new Padding(0), true)));
+            (new Label { Text = "Gerar documento ou planilha", Font = TitleFont, AutoSize = true }, new Padding(0), false),
+            (MutedLabel("Escolha o relatório do projeto (PDF) para gerar o TCR/TCE em Word, ou um Word com " +
+                        "as tabelas de materiais para gerar a planilha."), new Padding(0, 2, 0, 12), false),
+            (_drop, new Padding(0), false),
+            (_pdfChoice = PdfOutputChoice(), new Padding(0, 12, 0, 0), false),
+            (_generateButton, new Padding(0, 12, 0, 0), false),
+            (_progress, new Padding(0, 4, 0, 0), false),
+            (new Label { Text = "Resultado", Font = BoldFont, AutoSize = true }, new Padding(0, 14, 0, 4), false),
+            (_result, new Padding(0), false),
+            (actions, new Padding(0), false),
+            (new Panel(), new Padding(0), true)));
         return tab;
+    }
+
+    /// <summary>What to generate when the input is a PDF report; only enabled once a PDF is selected.</summary>
+    private FlowLayoutPanel PdfOutputChoice()
+    {
+        var current = Config.LoadPdfOutput();
+        _pdfWord.Checked = current != PdfOutput.Tce;
+        _pdfTce.Checked = current == PdfOutput.Tce;
+
+        void Save(PdfOutput output)
+        {
+            try
+            {
+                Config.SavePdfOutput(output);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Trace.TraceWarning("Não foi possível salvar as configurações: {0}", e.Message);
+            }
+        }
+
+        _pdfWord.CheckedChanged += (_, _) =>
+        {
+            if (_pdfWord.Checked)
+                Save(PdfOutput.Word);
+        };
+        _pdfTce.CheckedChanged += (_, _) =>
+        {
+            if (_pdfTce.Checked)
+                Save(PdfOutput.Tce);
+        };
+
+        var caption = new Label { Text = "Gerar:", AutoSize = true, Margin = new Padding(0, 4, 8, 0) };
+        // Only makes sense for a PDF: a Word document in has no "generate Word" to choose.
+        var panel = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Visible = false };
+        panel.Controls.Add(caption);
+        panel.Controls.AddRange([_pdfWord, _pdfTce]);
+        return panel;
     }
 
     private TabPage BuildTemplateTab()
@@ -186,6 +252,30 @@ internal sealed class MainForm : Form
             Checked = Config.LoadHideEmptySections(), Enabled = current == OutputLayout.Compact,
         };
         var feedback = new Label { AutoSize = true, MaximumSize = new Size(WrapWidth, 0) };
+        var askNow = new RadioButton
+        {
+            Text = "Perguntar na hora de gerar", Font = BoldFont, AutoSize = true, Checked = Config.LoadAskPlaceholders(),
+        };
+        var leaveInWord = new RadioButton
+        {
+            Text = "Deixar em amarelo para preencher no Word", Font = BoldFont, AutoSize = true,
+            Checked = !Config.LoadAskPlaceholders(),
+        };
+        askNow.CheckedChanged += (_, _) =>
+        {
+            try
+            {
+                Config.SaveAskPlaceholders(askNow.Checked);
+                feedback.Text = "Salvo. Vale para os próximos documentos.";
+                feedback.ForeColor = Color.SeaGreen;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Trace.TraceWarning("Não foi possível salvar as configurações: {0}", e.Message);
+                feedback.Text = $"Não foi possível salvar a configuração: {e.Message}";
+                feedback.ForeColor = Color.Firebrick;
+            }
+        };
 
         void Save(OutputLayout layout)
         {
@@ -251,7 +341,47 @@ internal sealed class MainForm : Form
             (MutedLabel("Mantém as seções e o total de cada uma, mas oculta os materiais que não estão " +
                         "no documento. Dá para reexibir as linhas no Excel."), new Padding(18, 0, 0, 4), false),
             (hideEmpty, new Padding(18, 0, 0, 12), false),
+            (new Label { Text = "Campos em amarelo do Word (TCR/TCE)", AutoSize = true }, new Padding(0, 0, 0, 6), false),
+            (askNow, new Padding(0), false),
+            (MutedLabel("Antes de salvar, o app lista os campos em amarelo que não vieram do PDF para você digitar."),
+                new Padding(18, 0, 0, 8), false),
+            (leaveInWord, new Padding(0), false),
+            (MutedLabel("O documento sai com esses campos em amarelo e você preenche depois, no Word."),
+                new Padding(18, 0, 0, 12), false),
             (feedback, new Padding(0), false),
+            (new Panel(), new Padding(0), true)));
+        return tab;
+    }
+
+    private const string AuthorUrl = "https://github.com/23Edu4rd0";
+
+    private static void OpenLink(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception e) when (e is Win32Exception or InvalidOperationException)
+        {
+            Trace.TraceWarning("Não foi possível abrir {0}: {1}", url, e.Message);
+            MessageBox.Show($"Não foi possível abrir o link:\n{url}", AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private static TabPage BuildCreditsTab()
+    {
+        // The informational version may carry a "+commit" suffix after the number.
+        var version = Application.ProductVersion.Split('+')[0];
+        var author = new LinkLabel { Text = "Eduardo Viana", Font = BoldFont, AutoSize = true };
+        author.LinkClicked += (_, _) => OpenLink(AuthorUrl);
+        var tab = new TabPage("Créditos") { Padding = new Padding(Pad) };
+        tab.Controls.Add(Column(
+            (new Label { Text = AppTitle, Font = TitleFont, AutoSize = true }, new Padding(0), false),
+            (MutedLabel($"Versão {version}"), new Padding(0, 2, 0, 16), false),
+            (new Label { Text = "Criado por", AutoSize = true }, new Padding(0), false),
+            (author, new Padding(0, 2, 0, 16), false),
+            (MutedLabel("Gera a lista de materiais (planilha) e o TCR/TCE (Word) a partir dos documentos " +
+                        "do projeto, para você não ter que preencher tudo à mão."), new Padding(0), false),
             (new Panel(), new Padding(0), true)));
         return tab;
     }
@@ -271,6 +401,19 @@ internal sealed class MainForm : Form
         var remove = new Button { Text = "Remover selecionado", Enabled = false };
         var restore = new Button { Text = "Restaurar padrão" };
 
+        var kind = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill, Font = ListFont,
+        };
+        kind.Items.AddRange(["Documento Word (.docx)", "Relatório PDF (.pdf)"]);
+        kind.SelectedIndex = 0;
+        kind.SelectedIndexChanged += (_, _) =>
+        {
+            _headersPdf = kind.SelectedIndex == 1;
+            ShowHeaders(Config.LoadTableTitles(_headersPdf));
+            SayHeaders(string.Empty, Muted);
+        };
+
         var inputRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Height = 32 };
         inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
@@ -288,7 +431,7 @@ internal sealed class MainForm : Form
             }
             if (_headers.Items.Contains(title))
                 SayHeaders($"\"{title}\" já está na lista.", Color.Firebrick);
-            else if (SaveHeaders([.. _headers.Items.Cast<string>(), title]))
+            else if (SaveHeaders([.. _headers.Items.Cast<string>(), title], _headersPdf))
                 SayHeaders($"\"{title}\" adicionado.", Color.SeaGreen);
             input.Clear();
             input.Focus();
@@ -307,14 +450,14 @@ internal sealed class MainForm : Form
         {
             if (_headers.SelectedItem is not string title)
                 return;
-            if (SaveHeaders([.. _headers.Items.Cast<string>().Where(t => t != title)]))
+            if (SaveHeaders([.. _headers.Items.Cast<string>().Where(t => t != title)], _headersPdf))
                 SayHeaders($"\"{title}\" removido.", Muted);
         };
         restore.Click += (_, _) =>
         {
             if (Ask("Substituir a lista pelos cabeçalhos que vêm com o programa?\n\n" +
-                    string.Join("\n", Config.DefaultTableTitles.Select(t => "• " + t)),
-                    "Restaurar padrão", MessageBoxIcon.Question) && SaveHeaders(Config.DefaultTableTitles))
+                    string.Join("\n", Config.DefaultTitles(_headersPdf).Select(t => "• " + t)),
+                    "Restaurar padrão", MessageBoxIcon.Question) && SaveHeaders(Config.DefaultTitles(_headersPdf), _headersPdf))
                 SayHeaders("Lista padrão restaurada.", Color.SeaGreen);
         };
 
@@ -322,8 +465,11 @@ internal sealed class MainForm : Form
         tab.Controls.Add(Column(
             (new Label { Text = "Cabeçalhos procurados", Font = TitleFont, AutoSize = true }, new Padding(0), false),
             (MutedLabel("Ao gerar, o programa mostra todas as tabelas do documento. As que têm o título " +
-                        "(primeira célula) nesta lista já vêm marcadas; as outras você marca na hora."),
+                        "nesta lista já vêm marcadas; as outras você marca na hora. Cada tipo de documento " +
+                        "(Word ou PDF) tem a sua lista."),
                 new Padding(0, 2, 0, 16), false),
+            (new Label { Text = "Tipo de documento", Font = BoldFont, AutoSize = true }, new Padding(0, 0, 0, 4), false),
+            (kind, new Padding(0, 0, 0, 10), false),
             (new Label { Text = "Novo cabeçalho", Font = BoldFont, AutoSize = true }, new Padding(0, 0, 0, 4), false),
             (inputRow, new Padding(0), false),
             (_headersFeedback, new Padding(0, 4, 0, 12), false),
@@ -350,11 +496,11 @@ internal sealed class MainForm : Form
     }
 
     /// <summary>Saves and shows the header list; on failure keeps the list as it was.</summary>
-    private bool SaveHeaders(IReadOnlyList<string> titles)
+    private bool SaveHeaders(IReadOnlyList<string> titles, bool pdf)
     {
         try
         {
-            Config.SaveTableTitles(titles);
+            Config.SaveTableTitles(titles, pdf);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -363,7 +509,8 @@ internal sealed class MainForm : Form
                       $"Detalhe: {e.Message}");
             return false;
         }
-        ShowHeaders(Config.LoadTableTitles());
+        if (pdf == _headersPdf)
+            ShowHeaders(Config.LoadTableTitles(pdf));
         return true;
     }
 
@@ -452,7 +599,7 @@ internal sealed class MainForm : Form
         using var dialog = new OpenFileDialog
         {
             Title = "Selecione o documento",
-            Filter = "Documento Word (*.docx)|*.docx",
+            Filter = "Word ou PDF (*.docx;*.pdf)|*.docx;*.pdf|Documento Word (*.docx)|*.docx|Relatório do projeto (*.pdf)|*.pdf",
             InitialDirectory = _docxPath is null ? "" : Path.GetDirectoryName(_docxPath),
         };
         if (dialog.ShowDialog(this) == DialogResult.OK)
@@ -467,20 +614,27 @@ internal sealed class MainForm : Form
                         "Selecione o documento original (sem \"~$\" no início do nome).", "Documento");
             return;
         }
-        if (!path.EndsWith(".docx", StringComparison.OrdinalIgnoreCase))
+        if (!IsDocx(path) && !IsPdf(path))
         {
-            ShowWarning($"\"{Path.GetFileName(path)}\" não é um documento .docx.\n\n" +
+            ShowWarning($"\"{Path.GetFileName(path)}\" não é um documento .docx nem um PDF.\n\n" +
                         "Se for um arquivo .doc antigo, abra no Word e use Salvar como > Documento do Word (*.docx).",
                 "Documento");
             return;
         }
         _docxPath = path;
-        _docxName.Text = Path.GetFileName(_docxPath);
+        _drop.SetFile(Path.GetFileName(_docxPath),
+            IsPdf(path) ? "PDF · relatório do projeto" : "Word · documento com planilhas de materiais");
         _generateButton.Enabled = true;
+        _pdfChoice!.Visible = IsPdf(path);
+        _generateButton.Text = IsPdf(path) ? "Gerar documento" : "Gerar planilha";
         _result.Text = string.Empty;
     }
 
-    /// <summary>Accepts a .docx dropped anywhere on the control or its children.</summary>
+    private static bool IsDocx(string path) => path.EndsWith(".docx", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPdf(string path) => path.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Accepts a .docx or .pdf dropped anywhere on the control or its children.</summary>
     private void EnableDocxDrop(Control control)
     {
         control.AllowDrop = true;
@@ -500,17 +654,52 @@ internal sealed class MainForm : Form
     {
         _busy = busy;
         _generateButton.Enabled = !busy;
-        _generateButton.Text = busy ? "Gerando..." : "Gerar planilha";
+        _generateButton.Text = busy ? "Gerando..." : _docxPath is not null && IsPdf(_docxPath) ? "Gerar documento" : "Gerar planilha";
+        _progress.Visible = busy;
+        _drop.Enabled = !busy;
         UseWaitCursor = busy;
+    }
+
+    /// <summary>Remembers the generated file so it can be opened or shown in its folder from the result area.</summary>
+    private void SetOutput(string path)
+    {
+        _lastOutput = path;
+        _openOutput.Enabled = _showOutput.Enabled = File.Exists(path);
+    }
+
+    private void ShowInFolder()
+    {
+        if (_lastOutput is null || !File.Exists(_lastOutput))
+            return;
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{_lastOutput}\"") { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception e) when (e is Win32Exception or InvalidOperationException)
+        {
+            Trace.TraceWarning("Não foi possível abrir a pasta: {0}", e.Message);
+        }
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == (Keys.Control | Keys.O) && !_busy)
+        {
+            ChooseDocx();
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private async void Generate()
     {
         if (_docxPath is null)
             return;
-        if (_templatePath is null || !File.Exists(_templatePath))
+        var word = IsPdf(_docxPath);
+        var kind = _pdfTce.Checked ? ReportKind.Tce : ReportKind.Tcr;
+        if (!word && (_templatePath is null || !File.Exists(_templatePath)))
             SetTemplate(Config.LoadTemplatePath(), save: false);
-        if (_templatePath is null || !File.Exists(_templatePath))
+        if (!word && (_templatePath is null || !File.Exists(_templatePath)))
         {
             ShowInfo(_templatePath is null
                     ? "Nenhum modelo de planilha foi configurado. Selecione a planilha modelo."
@@ -522,29 +711,36 @@ internal sealed class MainForm : Form
         }
 
         var docx = _docxPath;
-        var template = _templatePath!;
+        var template = _templatePath;
         SetBusy(true);
+        _openOutput.Enabled = _showOutput.Enabled = false;
         _result.Text = "Lendo o documento...";
         try
         {
-            var content = await Task.Run(() => DocxReader.Read(docx));
+            var content = await Task.Run(() => IsPdf(docx) ? PdfReader.Read(docx) : DocxReader.Read(docx));
             if (content.Tables.Count == 0)
             {
-                _result.Text = NothingFoundMessage(content);
+                _result.Text = NothingFoundMessage(content, IsPdf(docx));
                 ShowWarning(_result.Text.Replace("\r\n", "\n"), "Nada encontrado");
                 return;
             }
 
             _result.Text = "Escolha as tabelas...";
-            if (ChooseTables(content.Tables) is not var (tables, sum))
+            if (ChooseTables(content.Tables, IsPdf(docx)) is not var (tables, sum))
             {
                 _result.Text = string.Empty;
                 return;
             }
+            if (word)
+            {
+                await GenerateWord(docx, content, tables, kind);
+                return;
+            }
+
             var groups = MaterialGroups.Group(tables);
             var materials = MaterialGroups.Combine(groups, sum);
 
-            if (AskOutput(docx) is not { } chosen)
+            if (AskOutput(docx, word: false) is not { } chosen)
             {
                 _result.Text = string.Empty;
                 return;
@@ -560,8 +756,9 @@ internal sealed class MainForm : Form
             var layout = Config.LoadOutputLayout();
             var hideEmpty = Config.LoadHideEmptySections();
             var added = await Task.Run(() =>
-                XlsxWriter.Fill(materials, content.Info, output, template, layout, hideEmpty));
+                XlsxWriter.Fill(materials, content.Info, output, template!, layout, hideEmpty));
 
+            SetOutput(output);
             _result.Text = SummaryMessage(content, tables, groups, materials, sum, added, output, layout);
             if (renamed is not null)
                 _result.Text = renamed + "\r\n\r\n" + _result.Text;
@@ -593,21 +790,26 @@ internal sealed class MainForm : Form
     /// Shows the tables found so the user picks the ones to use. Remembers newly checked
     /// titles when asked. Null when cancelled.
     /// </summary>
-    private (IReadOnlyList<MaterialTable> Tables, bool Sum)? ChooseTables(IReadOnlyList<MaterialTable> tables)
+    private (IReadOnlyList<MaterialTable> Tables, bool Sum)? ChooseTables(
+        IReadOnlyList<MaterialTable> tables, bool fromPdf)
     {
-        var registered = Config.LoadTableTitles();
+        var registered = Config.LoadTableTitles(fromPdf);
         using var picker = new TableSelectionForm(tables, registered);
         if (picker.ShowDialog(this) != DialogResult.OK)
             return null;
 
         var remember = picker.TitlesToRemember;
-        if (remember.Count > 0 && SaveHeaders([.. registered, .. remember]))
+        if (remember.Count > 0 && SaveHeaders([.. registered, .. remember], fromPdf))
             SayHeaders($"{remember.Count} cabeçalho(s) adicionado(s) a partir do documento.", Color.SeaGreen);
         return (picker.Selected, picker.Sum);
     }
 
-    private static string NothingFoundMessage(DocxContent content)
+    private static string NothingFoundMessage(DocumentContent content, bool fromPdf)
     {
+        if (fromPdf)
+            return AppendWarnings("Não encontrei a lista de materiais no PDF.\r\n\r\n" +
+                                  "O programa espera o relatório do projeto exportado pelo Route Map, com as tabelas " +
+                                  "\"Material / Qtd. / Un. / Valor unit. / Total\".", content.Warnings);
         var message = content.EmbeddedWorkbooks == 0
             ? "O documento não tem nenhuma planilha do Excel incorporada.\r\n\r\n" +
               "O programa lê apenas tabelas inseridas como objeto do Excel (Inserir > Tabela > Planilha do Excel), " +
@@ -620,7 +822,7 @@ internal sealed class MainForm : Form
 
     private static string Quantity(double value) => value.ToString("0.###", CultureInfo.CurrentCulture);
 
-    private static string SummaryMessage(DocxContent content, IReadOnlyList<MaterialTable> tables,
+    private static string SummaryMessage(DocumentContent content, IReadOnlyList<MaterialTable> tables,
         IReadOnlyList<IReadOnlyList<Occurrence>> groups, OrderedDictionary<string, Material> materials,
         bool summed, IReadOnlyList<string> added, string output, OutputLayout layout)
     {
@@ -665,17 +867,134 @@ internal sealed class MainForm : Form
     private static string AppendWarnings(string message, IReadOnlyList<string> warnings) =>
         warnings.Count == 0 ? message : message + "\r\n\r\nAvisos:\r\n- " + string.Join("\r\n- ", warnings);
 
-    private string? AskOutput(string docx)
+    private string? AskOutput(string docx, bool word, ReportKind kind = ReportKind.Tcr)
     {
         using var dialog = new SaveFileDialog
         {
-            Title = "Salvar planilha",
+            Title = word ? "Salvar documento" : "Salvar planilha",
             InitialDirectory = Path.GetDirectoryName(docx),
-            FileName = $"{OutputName(docx)}.xlsx",
-            DefaultExt = "xlsx",
-            Filter = "Planilha Excel (*.xlsx)|*.xlsx",
+            FileName = word ? $"{ReportName(docx, kind)}.docx" : $"{OutputName(docx)}.xlsx",
+            DefaultExt = word ? "docx" : "xlsx",
+            Filter = word ? "Documento Word (*.docx)|*.docx" : "Planilha Excel (*.xlsx)|*.xlsx",
         };
         return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+    }
+
+    /// <summary>"Relatorio_Rede_X" becomes "TCR_Rede_X" (or TCE); any other name just gets the prefix.</summary>
+    private static string ReportName(string pdfPath, ReportKind kind)
+    {
+        var prefix = kind == ReportKind.Tce ? "TCE" : "TCR";
+        var name = Path.GetFileNameWithoutExtension(pdfPath);
+        var renamed = Regex.Replace(name, "^Relat[óo]rio", prefix, RegexOptions.IgnoreCase);
+        return renamed != name ? renamed : prefix + "_" + name;
+    }
+
+    /// <summary>Fills the TCR Word template with the PDF report and offers to open it.</summary>
+    private async Task GenerateWord(string pdf, DocumentContent content, IReadOnlyList<MaterialTable> tables,
+        ReportKind kind)
+    {
+        if (content.Report is not { } report)
+            throw new AppException("Não foi possível ler os dados do projeto no PDF.");
+
+        var name = kind.ToString().ToUpperInvariant();
+        var template = Config.LoadWordTemplate(kind);
+        if (template is null)
+        {
+            ShowInfo($"Nenhum modelo do Word ({name}) foi configurado. Selecione o documento {name} em branco.", "Modelo do Word");
+            template = ChooseWordTemplate(kind);
+            if (template is null)
+            {
+                _result.Text = string.Empty;
+                return;
+            }
+        }
+
+        using (var form = new ReportDataForm(report, kind))
+        {
+            if (form.ShowDialog(this) != DialogResult.OK)
+            {
+                _result.Text = string.Empty;
+                return;
+            }
+            report = form.Result;
+        }
+
+        if (AskOutput(pdf, word: true, kind) is not { } chosen)
+        {
+            _result.Text = string.Empty;
+            return;
+        }
+        // A file open in Word cannot be replaced, so the document gets the next free name instead.
+        var output = Files.IsLocked(chosen) ? Files.FreeName(chosen) : chosen;
+        var renamed = output != chosen
+            ? $"\"{Path.GetFileName(chosen)}\" está aberto no Word, então o documento foi salvo como " +
+              $"\"{Path.GetFileName(output)}\"."
+            : null;
+
+        _result.Text = "Gerando o documento...";
+        var (warnings, objects) = await Task.Run(() => TcrWriter.Fill(template, report, tables, output, kind, AskPlaceholders));
+        _result.Text = "Atualizando as tabelas pelo Word...";
+        var refresh = await Task.Run(() => WordRefresh.Run(output, objects));
+        if (refresh is not null)
+            warnings = [.. warnings, refresh];
+
+        var message = $"Documento {name} gerado.\r\n" +
+                      $"{tables.Sum(t => t.Items.Count)} materiais em {tables.Count} tabela(s).\r\n\r\n" +
+                      $"Salvo em:\r\n{output}\r\n\r\n" +
+                      $"Confira no Word: o código do {name} (capa) e o mapa não vêm do PDF, e a mão de obra " +
+                      "ficou como no modelo.";
+        SetOutput(output);
+        _result.Text = AppendWarnings(renamed is null ? message : renamed + "\r\n\r\n" + message, warnings);
+        if (Ask(renamed is null ? "Documento gerado. Abrir agora?" : $"Documento gerado.\n\n{renamed}\n\nAbrir agora?",
+                "Concluído", MessageBoxIcon.Information))
+            OpenFile(output);
+    }
+
+    /// <summary>
+    /// Called from the generating thread: asks the user for the highlighted spots, unless the setting
+    /// says to leave them for Word. Null leaves them all highlighted.
+    /// </summary>
+    private Dictionary<int, string>? AskPlaceholders(IReadOnlyList<Placeholder> items)
+    {
+        if (!Config.LoadAskPlaceholders())
+            return null;
+        return (Dictionary<int, string>?)Invoke(() =>
+        {
+            using var form = new PlaceholderForm(items);
+            return form.ShowDialog(this) == DialogResult.OK ? form.Values : null;
+        });
+    }
+
+    /// <summary>Lets the user pick the blank TCR when none is built in; remembers the choice.</summary>
+    private byte[]? ChooseWordTemplate(ReportKind kind)
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = $"Selecione o modelo {kind.ToString().ToUpperInvariant()} (Word)",
+            Filter = "Documento Word (*.docx)|*.docx",
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return null;
+        try
+        {
+            var bytes = Files.ReadAllBytesShared(dialog.FileName);
+            using var zip = new System.IO.Compression.ZipArchive(new MemoryStream(bytes),
+                System.IO.Compression.ZipArchiveMode.Read);
+            if (zip.GetEntry("word/document.xml") is null)
+                throw new InvalidDataException();
+            Config.SaveWordTemplatePath(kind, dialog.FileName);
+            return bytes;
+        }
+        catch (InvalidDataException)
+        {
+            ShowWarning($"\"{Path.GetFileName(dialog.FileName)}\" não é um documento Word (.docx) válido.", "Modelo inválido");
+            return null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            ShowWarning($"Não foi possível abrir o modelo.\n\nDetalhe: {e.Message}", "Modelo do Word");
+            return null;
+        }
     }
 
     /// <summary>Same name as the TCE document, with the leading TCE swapped for TCX.</summary>

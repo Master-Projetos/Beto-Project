@@ -14,7 +14,7 @@ internal static partial class DocxReader
     private const int MaxEmbeddedWorkbooks = 500;
 
     /// <summary>Reads every table that looks like a material list; the user picks which ones to use.</summary>
-    public static DocxContent Read(string docxPath)
+    public static DocumentContent Read(string docxPath)
     {
         using var docx = Open(docxPath);
         var tables = new List<MaterialTable>();
@@ -45,7 +45,7 @@ internal static partial class DocxReader
             }
         }
 
-        return new DocxContent(tables, ReadProjectInfo(docx), embedded.Count, warnings);
+        return new DocumentContent(tables, ReadProjectInfo(docx), embedded.Count, warnings);
     }
 
     private static ZipArchive Open(string docxPath)

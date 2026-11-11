@@ -40,6 +40,18 @@ internal static partial class Config
         "DATA CENTER E POP - INDOOR (EQUIPAMENTOS PASSIVOS)",
     ];
 
+    /// <summary>Categories of the "Lista de materiais" in the Route Map PDF report.</summary>
+    public static readonly IReadOnlyList<string> DefaultPdfTableTitles =
+    [
+        "FERRAGENS",
+        "CABOS / LANÇAMENTO",
+        "FUSÃO",
+        "DATA CENTER — PASSIVO",
+        "DATA CENTER — ATIVO",
+    ];
+
+    public static IReadOnlyList<string> DefaultTitles(bool pdf) => pdf ? DefaultPdfTableTitles : DefaultTableTitles;
+
     private static readonly Dictionary<string, string> NameAliases = new(StringComparer.Ordinal)
     {
         ["CONECTOR RJ45"] = "CONECTORES RJ45",
@@ -91,14 +103,16 @@ internal static partial class Config
         File.WriteAllText(SettingsFile, json.ToJsonString());
     }
 
+    private static string SettingsKey(bool pdf) => pdf ? "pdfHeaders" : "headers";
+
     /// <summary>Table headers to look for, normalized; defaults until the user saves a list.</summary>
-    public static IReadOnlyList<string> LoadTableTitles()
+    public static IReadOnlyList<string> LoadTableTitles(bool pdf = false)
     {
         try
         {
             var settings = ReadSettings();
-            if (settings["headers"] is not JsonArray saved)
-                return DefaultTableTitles;
+            if (settings[SettingsKey(pdf)] is not JsonArray saved)
+                return DefaultTitles(pdf);
             return saved
                 .Select(n => n?.GetValue<string>())
                 .Where(s => !string.IsNullOrWhiteSpace(s))
@@ -108,14 +122,14 @@ internal static partial class Config
         }
         catch (Exception e) when (e is InvalidOperationException or FormatException)
         {
-            return DefaultTableTitles;
+            return DefaultTitles(pdf);
         }
     }
 
-    public static void SaveTableTitles(IEnumerable<string> titles)
+    public static void SaveTableTitles(IEnumerable<string> titles, bool pdf = false)
     {
         var json = ReadSettings();
-        json["headers"] = new JsonArray(titles
+        json[SettingsKey(pdf)] = new JsonArray(titles
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Select(t => Normalize(t))
             .Distinct(StringComparer.Ordinal)
@@ -196,6 +210,95 @@ internal static partial class Config
         WriteSettings(json);
     }
 
+    public static readonly string TcrTemplate = Path.Combine(AppContext.BaseDirectory, "templates", "tcr.docx");
+    public static readonly string TceTemplate = Path.Combine(AppContext.BaseDirectory, "templates", "tce.docx");
+
+    /// <summary>
+    /// The Word template of a report: the one picked by the user, the one next to the executable, or the
+    /// one built into it. Null when there is none.
+    /// </summary>
+    public static byte[]? LoadWordTemplate(ReportKind kind)
+    {
+        var (key, file, resource) = kind == ReportKind.Tce
+            ? ("tceTemplate", TceTemplate, "ListaMateriais.tce.docx")
+            : ("tcrTemplate", TcrTemplate, "ListaMateriais.tcr.docx");
+        string? saved = null;
+        try
+        {
+            saved = ReadSettings()[key]?.GetValue<string>();
+        }
+        catch (Exception e) when (e is InvalidOperationException or FormatException)
+        {
+            saved = null;
+        }
+
+        foreach (var candidate in new[] { saved, file })
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))
+                return Files.ReadAllBytesShared(candidate);
+        }
+
+        using var stream = typeof(Config).Assembly.GetManifestResourceStream(resource);
+        if (stream is null)
+            return null;
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
+
+    public static void SaveWordTemplatePath(ReportKind kind, string path)
+    {
+        var json = ReadSettings();
+        json[kind == ReportKind.Tce ? "tceTemplate" : "tcrTemplate"] = Path.GetFullPath(path);
+        WriteSettings(json);
+    }
+
+    /// <summary>What to generate from a PDF report; Word (TCR) until the user chooses otherwise.</summary>
+    public static PdfOutput LoadPdfOutput()
+    {
+        try
+        {
+            return Enum.TryParse<PdfOutput>(ReadSettings()["pdfOutput"]?.GetValue<string>(), out var output)
+                   && Enum.IsDefined(output)
+                ? output
+                : PdfOutput.Word;
+        }
+        catch (Exception e) when (e is InvalidOperationException or FormatException)
+        {
+            return PdfOutput.Word;
+        }
+    }
+
+    public static void SavePdfOutput(PdfOutput output)
+    {
+        var json = ReadSettings();
+        json["pdfOutput"] = output.ToString();
+        WriteSettings(json);
+    }
+
+    /// <summary>
+    /// Whether the highlighted spots of the Word template that the app could not fill are asked for
+    /// when generating (true) or left highlighted to be typed in Word (false).
+    /// </summary>
+    public static bool LoadAskPlaceholders()
+    {
+        try
+        {
+            return ReadSettings()["askPlaceholders"]?.GetValue<bool>() ?? true;
+        }
+        catch (Exception e) when (e is InvalidOperationException or FormatException)
+        {
+            return true;
+        }
+    }
+
+    public static void SaveAskPlaceholders(bool ask)
+    {
+        var json = ReadSettings();
+        json["askPlaceholders"] = ask;
+        WriteSettings(json);
+    }
+
     public static OutputLayout LoadOutputLayout()
     {
         try
@@ -237,6 +340,18 @@ internal static partial class Config
         json["hideEmptySections"] = hide;
         WriteSettings(json);
     }
+}
+
+internal enum PdfOutput
+{
+    /// <summary>The TCR Word document.</summary>
+    Word,
+
+    /// <summary>The TCE Word document.</summary>
+    Tce,
+
+    /// <summary>The material list spreadsheet (.xlsx).</summary>
+    Spreadsheet,
 }
 
 internal enum OutputLayout

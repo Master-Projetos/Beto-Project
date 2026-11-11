@@ -17,11 +17,42 @@ internal sealed record MaterialTable(string Title, IReadOnlyList<Occurrence> Ite
 
 /// <param name="Tables">Every table that looks like a material list, in document order.</param>
 /// <param name="EmbeddedWorkbooks">How many Excel workbooks are embedded in the document.</param>
-internal sealed record DocxContent(
+internal sealed record DocumentContent(
     IReadOnlyList<MaterialTable> Tables,
     ProjectInfo Info,
     int EmbeddedWorkbooks,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    ProjectReport? Report = null);
+
+/// <summary>Everything the Route Map PDF report says about the project besides the material lists.</summary>
+internal sealed record ProjectReport(
+    string? Title,
+    string? City,
+    string? Neighborhood,
+    string? Author,
+    string? Date,
+    string? Objective,
+    string? Scope,
+    double? Houses,
+    double? ExistingPorts,
+    double? NewPorts,
+    string? PenetrationRate,
+    double? LaunchMeters,
+    double? Posts,
+    double? RegionalLabor,
+    double? OutsourcedLabor,
+    double? SafetyPercent,
+    double? Days,
+    ClientInfo? Client = null,
+    string? Code = null,
+    string? Pop = null,
+    string? Equipment = null,
+    string? ContractTerm = null,
+    byte[]? Map = null);
+
+/// <summary>The first business (B2B) client of the report: who the study is for.</summary>
+internal sealed record ClientInfo(string? Name, string? Address, string? Coordinates, string? Network,
+    string? Service, string? Bandwidth, string? Ip, string? Seller);
 
 /// <summary>Combines the rows of the chosen tables into one entry per material.</summary>
 internal static class MaterialGroups
