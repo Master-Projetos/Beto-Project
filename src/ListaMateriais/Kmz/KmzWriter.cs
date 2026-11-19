@@ -70,6 +70,7 @@ internal static class KmzWriter
         {
             document.Add(new XElement(Kml + "Placemark",
                 new XElement(Kml + "name", Clean(point.Name)),
+                point.Description is { } description ? new XElement(Kml + "description", Clean(description)) : null,
                 new XElement(Kml + "styleUrl", "#" + styleId),
                 new XElement(Kml + "Point",
                     // KML wants longitude first.
@@ -81,7 +82,7 @@ internal static class KmzWriter
     private static string Number(double value) => value.ToString("0.#########", CultureInfo.InvariantCulture);
 
     /// <summary>Drops the control characters XML cannot hold (they come along when pasting from other programs).</summary>
-    private static string Clean(string text)
+    internal static string Clean(string text)
     {
         var clean = new StringBuilder(text.Length);
         for (var i = 0; i < text.Length; i++)
@@ -94,7 +95,7 @@ internal static class KmzWriter
         return clean.ToString();
     }
 
-    private static void TryDelete(string path)
+    internal static void TryDelete(string path)
     {
         try
         {

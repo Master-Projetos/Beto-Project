@@ -49,12 +49,43 @@ public class PointTextTests
     }
 
     [Fact]
-    public void A_latitude_off_the_globe_is_a_problem_not_a_point()
+    public void A_swapped_pair_off_the_globe_is_swapped_back()
     {
         var result = Parse("A, -146.6, -23.5");
 
+        Assert.Empty(result.Problems);
+        Assert.Equal(new MapPoint("A", -23.5, -146.6), Assert.Single(result.Points));
+        Assert.Contains("trocadas", Assert.Single(result.Fixes));
+    }
+
+    [Fact]
+    public void A_latitude_that_fits_nowhere_is_a_problem()
+    {
+        var result = Parse("A, -246.6, -23.5");
+
         Assert.Empty(result.Points);
-        Assert.Contains("ordem", Assert.Single(result.Problems));
+        Assert.Single(result.Problems);
+    }
+
+    [Fact]
+    public void Numbers_without_decimal_separator_are_read_near_the_other_points()
+    {
+        var result = Parse("A, -19.9, -44.0\nB, -19.8, -43.9\nC, -20.1, -44.2\nD, -1993333, -4377777\nE, -44.1, -19.95");
+
+        Assert.Empty(result.Problems);
+        Assert.Equal(new MapPoint("D", -19.93333, -43.77777), result.Points[3]);
+        Assert.Equal(new MapPoint("E", -19.95, -44.1), result.Points[4]);
+        Assert.Equal(2, result.Fixes.Count);
+    }
+
+    [Fact]
+    public void Repeated_lines_are_dropped_but_different_names_on_the_same_spot_stay()
+    {
+        var result = Parse("A, -19.9, -44.0\nA, -19.9, -44.0\nB, -19.9, -44.0");
+
+        Assert.Equal(["A", "B"], result.Points.Select(p => p.Name));
+        Assert.Empty(result.Problems);
+        Assert.Contains("repetida", Assert.Single(result.Fixes));
     }
 
     [Theory]
@@ -233,5 +264,120 @@ public class MixedLinesTests
         Assert.Equal(["A", "B", "C"], result.Points.Select(p => p.Name));
         Assert.StartsWith("Linha 4: ", Assert.Single(result.Problems));
         Assert.DoesNotContain("Linha 1", result.Problems[0]);
+    }
+}
+
+
+public class TypoTests
+{
+    [Theory]
+    [InlineData("-20..29481", -20.29481)]
+    [InlineData("-2'0.30591", -20.30591)]
+    [InlineData("-20,,5", -20.5)]
+    public void Slips_in_a_number_are_repaired(string text, double expected)
+    {
+        Assert.False(Coordinate.TryParse(text, out _));
+        Assert.True(Coordinate.TryRepair(text, out var value));
+        Assert.Equal(expected, value, 6);
+    }
+
+    [Theory]
+    [InlineData("-20.294.81")]
+    [InlineData("abc")]
+    [InlineData("-20.5")]
+    public void Ambiguous_or_correct_text_is_not_repaired(string text) => Assert.False(Coordinate.TryRepair(text, out _));
+
+    [Fact]
+    public void A_sheet_row_with_a_slip_becomes_a_point_and_a_fix()
+    {
+        var table = new SheetTable("Dados", [["Lat", "Lon"], ["-20..29481", "-44.1"], ["-2'0.30591", "-44.2"]], [1, 2, 3], 2);
+
+        var result = SheetPoints.Read(table, -1, 0, 1, hasHeader: true);
+
+        Assert.Empty(result.Problems);
+        Assert.Equal([-20.29481, -20.30591], result.Points.Select(p => p.Latitude));
+        Assert.Equal(2, result.Fixes.Count);
+    }
+}
+
+public class SheetFiltersTests
+{
+    [Fact]
+    public void Applies_all_active_rules_with_and_and_ignores_case_and_accents()
+    {
+        var table = new SheetTable("Dados",
+        [
+            ["Cidade", "Status", "Nome"],
+            ["DIVINOPOLIS", "Ativo", "A"],
+            ["Divinópolis", "Inativo", "B"],
+            ["Itaúna", "Ativo", "C"],
+            ["Divinopolis", "ATIVO", "D"],
+        ],
+        [1, 2, 3, 4, 5], 3);
+
+        var filtered = SheetFilters.Apply(table,
+        [
+            new SheetFilterRule(0, "Contém", "Divinópolis"),
+            new SheetFilterRule(1, "É igual a", "Ativo"),
+        ], hasHeader: true);
+
+        Assert.Equal([1, 2, 5], filtered.RowNumbers);
+        Assert.Equal("A", filtered.Rows[1][2]);
+        Assert.Equal("D", filtered.Rows[2][2]);
+    }
+
+    [Fact]
+    public void Inactive_rules_are_ignored_and_empty_operators_work()
+    {
+        var table = new SheetTable("Dados",
+        [
+            ["Cidade", "Status"],
+            ["Divinópolis", "Ativo"],
+            ["", "Ativo"],
+            ["Divinópolis", ""],
+        ],
+        [1, 2, 3, 4], 2);
+
+        var filtered = SheetFilters.Apply(table,
+        [
+            new SheetFilterRule(0, "Contém", "Divinópolis", Active: false),
+            new SheetFilterRule(1, "Não está vazio", ""),
+        ], hasHeader: true);
+
+        Assert.Equal([1, 2, 3], filtered.RowNumbers);
+    }
+
+    [Fact]
+    public void Or_starts_a_new_group_and_and_binds_tighter()
+    {
+        var table = new SheetTable("Dados",
+        [
+            ["Cidade", "Status", "Portas"],
+            ["Divinópolis", "Ativo", "8"],
+            ["Divinópolis", "Inativo", "16"],
+            ["Itaúna", "Inativo", "4"],
+            ["Itaúna", "Ativo", "12"],
+        ],
+        [1, 2, 3, 4, 5], 3);
+
+        // (Cidade = Divinópolis E Status = Ativo) OU Portas > 10
+        var filtered = SheetFilters.Apply(table,
+        [
+            new SheetFilterRule(0, "É igual a", "Divinopolis"),
+            new SheetFilterRule(1, "É igual a", "ativo"),
+            new SheetFilterRule(2, "Maior que", "10", Or: true),
+        ], hasHeader: true);
+
+        Assert.Equal([1, 2, 3, 5], filtered.RowNumbers);
+    }
+
+    [Fact]
+    public void One_of_a_list()
+    {
+        var table = new SheetTable("Dados", [["A"], ["Itaúna"], ["Divinópolis"], ["Pará de Minas"]], [1, 2, 3, 4], 1);
+
+        var filtered = SheetFilters.Apply(table, [new SheetFilterRule(0, "É um destes", "itauna; para de minas")], hasHeader: false);
+
+        Assert.Equal([2, 4], filtered.RowNumbers);
     }
 }

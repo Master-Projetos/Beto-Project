@@ -9,7 +9,7 @@
     <AssemblyName>ListaMateriais</AssemblyName>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <RootNamespace>ListaMateriais</RootNamespace>
-    <Version>2.1.0</Version>
+    <Version>4.1.0</Version>
     <Authors>Eduardo</Authors>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <SatelliteResourceLanguages>pt-BR</SatelliteResourceLanguages>
@@ -19,11 +19,14 @@
   </PropertyGroup>
 
   <!-- The default template goes inside the executable, so it works without the templates/ folder.
-       templates/ is not versioned (client data); without it the build still works, with no default. -->
+       templates/ is not versioned (client data); without it the build still works, with no default.
+       -p:EmbedTemplates=false leaves them out even when they exist: the releases on GitHub (public) are
+       built that way, and the app keeps the templates of the earlier copy in its settings folder. -->
   <PropertyGroup>
+    <EmbedTemplates Condition="'$(EmbedTemplates)' == ''">true</EmbedTemplates>
     <DefaultTemplate>$(MSBuildThisFileDirectory)..\..\templates\lista_materiais.xlsx</DefaultTemplate>
   </PropertyGroup>
-  <ItemGroup Condition="Exists('$(DefaultTemplate)')">
+  <ItemGroup Condition="Exists('$(DefaultTemplate)') And '$(EmbedTemplates)' == 'true'">
     <EmbeddedResource Include="$(DefaultTemplate)" LogicalName="ListaMateriais.lista_materiais.xlsx" Link="templates\lista_materiais.xlsx" />
   </ItemGroup>
 
@@ -31,14 +34,14 @@
   <PropertyGroup>
     <DefaultTcrTemplate>$(MSBuildThisFileDirectory)..\..\templates\tcr.docx</DefaultTcrTemplate>
   </PropertyGroup>
-  <ItemGroup Condition="Exists('$(DefaultTcrTemplate)')">
+  <ItemGroup Condition="Exists('$(DefaultTcrTemplate)') And '$(EmbedTemplates)' == 'true'">
     <EmbeddedResource Include="$(DefaultTcrTemplate)" LogicalName="ListaMateriais.tcr.docx" Link="templates\tcr.docx" />
   </ItemGroup>
 
   <PropertyGroup>
     <DefaultTceTemplate>$(MSBuildThisFileDirectory)..\..\templates\tce.docx</DefaultTceTemplate>
   </PropertyGroup>
-  <ItemGroup Condition="Exists('$(DefaultTceTemplate)')">
+  <ItemGroup Condition="Exists('$(DefaultTceTemplate)') And '$(EmbedTemplates)' == 'true'">
     <EmbeddedResource Include="$(DefaultTceTemplate)" LogicalName="ListaMateriais.tce.docx" Link="templates\tce.docx" />
   </ItemGroup>
 

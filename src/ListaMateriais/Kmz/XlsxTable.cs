@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.IO.Compression;
 using System.Xml;
 using System.Xml.Linq;
@@ -118,29 +119,31 @@ internal static class XlsxTable
     }
 }
 
+/// <summary>The city and state typed by the user, for sheets (or rows) that do not say them.</summary>
+internal sealed record AddressDefaults(string? City = null, string? State = null)
+{
+    public static readonly AddressDefaults None = new();
+}
+
+/// <summary>What came out of a sheet.</summary>
+/// <param name="Points">The points ready, the rows left out and why, and what was corrected.</param>
+/// <param name="Pending">Addresses not looked up yet, once each.</param>
+/// <param name="FromCoordinates">Points placed by their latitude and longitude.</param>
+/// <param name="Located">Points placed by their address, by how precise the place found is.</param>
+internal sealed record SheetReading(PointList Points, IReadOnlyList<AddressQuery> Pending, int FromCoordinates,
+    IReadOnlyDictionary<GeoPrecision, int> Located)
+{
+    public static readonly SheetReading Empty = new(PointList.Empty, [], 0, new Dictionary<GeoPrecision, int>());
+}
+
 /// <summary>Turns the rows of a sheet into points, given the columns the user picked.</summary>
 internal static class SheetPoints
 {
     /// <summary>Columns guessed from the header row: (name, latitude, longitude), -1 when not found.</summary>
     public static (int Name, int Latitude, int Longitude) GuessColumns(SheetTable table)
     {
-        int name = -1, latitude = -1, longitude = -1;
-        if (table.Rows.Count > 0)
-        {
-            var header = table.Rows[0];
-            for (var i = 0; i < header.Length; i++)
-            {
-                if (header[i] is not { } text)
-                    continue;
-                if (latitude < 0 && PointText.IsLatitudeKey(text))
-                    latitude = i;
-                else if (longitude < 0 && PointText.IsLongitudeKey(text))
-                    longitude = i;
-                else if (name < 0 && PointText.IsNameKey(text))
-                    name = i;
-            }
-        }
-        return (name, latitude, longitude);
+        var columns = ColumnGuesser.Guess(table, hasHeader: true);
+        return (columns.Name, columns.Latitude, columns.Longitude);
     }
 
     /// <summary>True when the first row holds column names instead of a point.</summary>
@@ -149,26 +152,230 @@ internal static class SheetPoints
                                   && Coordinate.TryParse(Cell(table.Rows[0], longitude), out _));
 
     /// <param name="name">Column of the names, or -1 to number the points.</param>
-    public static PointList Read(SheetTable table, int name, int latitude, int longitude, bool hasHeader)
+    public static PointList Read(SheetTable table, int name, int latitude, int longitude, bool hasHeader) =>
+        Read(table, new SheetColumns(Name: name, Latitude: latitude, Longitude: longitude), hasHeader, AddressDefaults.None, _ => null).Points;
+
+    /// <summary>
+    /// Each row becomes a point: by its latitude and longitude when it has them, otherwise by its address,
+    /// as far as <paramref name="lookup"/> already knows it (the addresses it does not know are returned as pending).
+    /// </summary>
+    /// <param name="lookup">The place found for an address, or null when it was not looked up yet.</param>
+    public static SheetReading Read(SheetTable table, SheetColumns columns, bool hasHeader, AddressDefaults defaults,
+        Func<AddressQuery, GeoResult?> lookup)
     {
         var points = new PointCollector(CoordinateOrder.LatitudeFirst);
+        var pending = new Dictionary<string, AddressQuery>();
+        var located = new Dictionary<GeoPrecision, int>();
+        var fromCoordinates = 0;
         for (var i = hasHeader ? 1 : 0; i < table.Rows.Count; i++)
         {
             var row = table.Rows[i];
-            var latitudeText = Cell(row, latitude);
-            var longitudeText = Cell(row, longitude);
-            if (latitudeText is null && longitudeText is null)
-                continue;
             var where = $"Linha {table.RowNumbers[i]}";
-            if (!Coordinate.TryParse(latitudeText, out var lat))
-                points.Problem(where, $"latitude inválida (\"{latitudeText}\").");
-            else if (!Coordinate.TryParse(longitudeText, out var lon))
-                points.Problem(where, $"longitude inválida (\"{longitudeText}\").");
-            else
-                points.Add(where, name >= 0 ? Cell(row, name) : null, lat, lon);
+            var name = columns.Name >= 0 ? Cell(row, columns.Name) : null;
+
+            if (columns.HasCoordinates && (Cell(row, columns.Latitude) is not null || Cell(row, columns.Longitude) is not null))
+            {
+                if (Coordinates(row, columns, where, points, report: !columns.HasAddress) is var (lat, lon))
+                {
+                    points.Add(where, name, lat, lon);
+                    fromCoordinates++;
+                    continue;
+                }
+                if (!columns.HasAddress)
+                    continue;
+            }
+            if (!columns.HasAddress)
+                continue;
+
+            if (Query(row, columns, defaults, out var problem) is not { } query)
+            {
+                if (problem is not null)
+                    points.Problem(where, problem);
+                continue;
+            }
+            switch (lookup(query))
+            {
+                case null:
+                    pending.TryAdd(query.Key, query);
+                    break;
+                case { Found: false }:
+                    points.Problem(where, $"endereço não encontrado no mapa: {query.Text}.");
+                    break;
+                case { Precision: GeoPrecision.City }:
+                    located[GeoPrecision.City] = located.GetValueOrDefault(GeoPrecision.City) + 1;
+                    points.Problem(where, $"só a cidade foi encontrada para \"{query.Text}\"; o ponto ficaria no centro da cidade e foi deixado de fora.");
+                    break;
+                case var found:
+                    located[found.Precision] = located.GetValueOrDefault(found.Precision) + 1;
+                    points.Add(where, name, found.Latitude, found.Longitude,
+                        $"Localizado pelo endereço, {GeoResult.Describe(found.Precision)}.\nNa planilha: {query.Text}\nNo mapa: {found.Label}");
+                    break;
+            }
         }
-        return points.Result;
+        return new SheetReading(points.Result, [.. pending.Values], fromCoordinates, located);
     }
 
-    private static string? Cell(string?[] row, int column) => column >= 0 && column < row.Length ? row[column] : null;
+    /// <summary>The address of a row, put together from its columns and the city typed by the user.</summary>
+    /// <param name="problem">Why the row has no address that can be looked up; null for an empty row.</param>
+    public static AddressQuery? Query(string?[] row, SheetColumns columns, AddressDefaults defaults, out string? problem)
+    {
+        problem = null;
+        var parsed = AddressText.Parse(Cell(row, columns.Street));
+        var typeCell = Cell(row, columns.StreetType);
+        var type = parsed.Type ?? (typeCell is null ? null : AddressText.StreetType(typeCell) ?? typeCell);
+        var street = parsed.Street is null ? null : type is null ? parsed.Street : $"{type} {parsed.Street}";
+        var number = AddressText.HouseNumber(Cell(row, columns.Number)) ?? parsed.Number;
+        var district = Cell(row, columns.District) ?? parsed.District;
+        var postal = AddressText.PostalCode(Cell(row, columns.PostalCode)) ?? parsed.PostalCode;
+
+        string? city = null;
+        var state = AddressText.StateCode(Cell(row, columns.State));
+        if (Cell(row, columns.City) is { } cityCell)
+        {
+            var (name, uf) = AddressText.SplitCity(cityCell);
+            city = name;
+            state ??= uf;
+        }
+        city ??= string.IsNullOrWhiteSpace(defaults.City) ? null : defaults.City.Trim();
+        state ??= AddressText.StateCode(defaults.State);
+
+        if (street is null && district is null)
+        {
+            if (row.Any(cell => !string.IsNullOrWhiteSpace(cell)))
+                problem = "sem coordenadas nem endereço.";
+            return null;
+        }
+        if (city is null)
+        {
+            problem = "sem cidade: escolha a coluna da cidade ou escreva a cidade no campo \"Cidade\".";
+            return null;
+        }
+        return new AddressQuery(street, number, district, city, state, postal);
+    }
+
+    /// <summary>The coordinates of a row, repaired when the slip is clear; null (and a problem when asked) otherwise.</summary>
+    private static (double Latitude, double Longitude)? Coordinates(string?[] row, SheetColumns columns, string where, PointCollector points, bool report)
+    {
+        var latitudeText = Cell(row, columns.Latitude);
+        var longitudeText = Cell(row, columns.Longitude);
+        var latitudeRepaired = false;
+        var longitudeRepaired = false;
+        if (!Coordinate.TryParse(latitudeText, out var lat) && !(latitudeRepaired = Coordinate.TryRepair(latitudeText, out lat)))
+        {
+            if (report)
+                points.Problem(where, $"latitude inválida (\"{latitudeText}\").");
+            return null;
+        }
+        if (!Coordinate.TryParse(longitudeText, out var lon) && !(longitudeRepaired = Coordinate.TryRepair(longitudeText, out lon)))
+        {
+            if (report)
+                points.Problem(where, $"longitude inválida (\"{longitudeText}\").");
+            return null;
+        }
+        if (latitudeRepaired)
+            points.Fixed(where, $"latitude digitada \"{latitudeText}\", lida como {lat.ToString("0.######", CultureInfo.CurrentCulture)}.");
+        if (longitudeRepaired)
+            points.Fixed(where, $"longitude digitada \"{longitudeText}\", lida como {lon.ToString("0.######", CultureInfo.CurrentCulture)}.");
+        return (lat, lon);
+    }
+
+    private static string? Cell(string?[] row, int column) =>
+        column >= 0 && column < row.Length && !string.IsNullOrWhiteSpace(row[column]) ? row[column]!.Trim() : null;
+}
+
+
+/// <summary>A condition applied to a worksheet column before its rows are converted to map points.</summary>
+/// <param name="Or">Joins this rule to the previous one with OU instead of E.</param>
+internal sealed record SheetFilterRule(int Column, string Operator, string Value, bool Active = true, bool Or = false);
+
+/// <summary>
+/// Applies the user's spreadsheet filters. Rules joined by E must all hold; OU starts another group,
+/// and a row passes when any group holds (E binds tighter than OU, as in a written sentence).
+/// </summary>
+internal static class SheetFilters
+{
+    public static readonly string[] Operators =
+    [
+        "É igual a", "Diferente de", "É um destes", "Contém", "Não contém", "Começa com", "Termina com",
+        "Maior que", "Menor que", "Está vazio", "Não está vazio",
+    ];
+
+    /// <summary>Operators that take no value.</summary>
+    public static bool NeedsValue(string op) => op is not ("Está vazio" or "Não está vazio");
+
+    public static SheetTable Apply(SheetTable table, IReadOnlyList<SheetFilterRule> rules, bool hasHeader)
+    {
+        var groups = new List<List<SheetFilterRule>>();
+        foreach (var rule in rules.Where(rule => rule.Active))
+        {
+            if (groups.Count == 0 || rule.Or)
+                groups.Add([]);
+            groups[^1].Add(rule);
+        }
+        if (groups.Count == 0)
+            return table;
+
+        var rows = new List<string?[]>();
+        var numbers = new List<int>();
+        for (var i = 0; i < table.Rows.Count; i++)
+        {
+            var row = table.Rows[i];
+            if (hasHeader && i == 0 || groups.Any(group => group.All(rule => Matches(Cell(row, rule.Column), rule))))
+            {
+                rows.Add(row);
+                numbers.Add(table.RowNumbers[i]);
+            }
+        }
+        return new SheetTable(table.Name, rows, numbers, table.Columns);
+    }
+
+    private static bool Matches(string? cell, SheetFilterRule rule)
+    {
+        var value = Normalize(rule.Value);
+        var actual = Normalize(cell);
+        return rule.Operator switch
+        {
+            "Contém" => actual.Contains(value, StringComparison.Ordinal),
+            "Não contém" => !actual.Contains(value, StringComparison.Ordinal),
+            "É igual a" => string.Equals(actual, value, StringComparison.Ordinal),
+            "Diferente de" => !string.Equals(actual, value, StringComparison.Ordinal),
+            "Começa com" => actual.StartsWith(value, StringComparison.Ordinal),
+            "Termina com" => actual.EndsWith(value, StringComparison.Ordinal),
+            "É um destes" => value.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .Contains(actual, StringComparer.Ordinal),
+            "Maior que" => Compare(actual, value) > 0,
+            "Menor que" => Compare(actual, value) < 0,
+            "Está vazio" => string.IsNullOrWhiteSpace(cell),
+            "Não está vazio" => !string.IsNullOrWhiteSpace(cell),
+            _ => true,
+        };
+    }
+
+    /// <summary>Compares as numbers when both are numbers (with "," or "." decimals), otherwise as text.</summary>
+    private static int? Compare(string actual, string value)
+    {
+        if (actual.Length == 0)
+            return null;
+        if (Number(actual) is { } left && Number(value) is { } right)
+            return left.CompareTo(right);
+        return string.CompareOrdinal(actual, value);
+    }
+
+    private static double? Number(string text) =>
+        double.TryParse(text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var number) ? number : null;
+
+    private static string Normalize(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+        var decomposed = value.Normalize(NormalizationForm.FormD);
+        var result = new StringBuilder(decomposed.Length);
+        foreach (var character in decomposed)
+            if (CharUnicodeInfo.GetUnicodeCategory(character) != UnicodeCategory.NonSpacingMark)
+                result.Append(character);
+        return result.ToString().Trim().ToUpperInvariant();
+    }
+
+    private static string? Cell(string?[] row, int column) =>
+        column >= 0 && column < row.Length ? row[column] : null;
 }

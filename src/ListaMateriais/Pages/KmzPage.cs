@@ -23,6 +23,111 @@ internal sealed class KmzPage : Page
 
     private static readonly ColorChoice OtherColor = new("Outra cor...", null);
 
+    /// <summary>The controls of one filter condition: one row of the filter grid.</summary>
+    private sealed class FilterRuleControls : IDisposable
+    {
+        public CheckBox Active { get; } = new() { Checked = true, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(2, 0, 6, 0) };
+        public Label Lead { get; } = new() { Text = "Onde", AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = Ui.Muted, Margin = new Padding(3, 0, 8, 0) };
+        public ComboBox Join { get; } = List("E", "OU");
+        public ComboBox Column { get; } = List();
+        public ComboBox Operator { get; } = List(SheetFilters.Operators);
+        public ComboBox Value { get; } = new()
+        {
+            DropDownStyle = ComboBoxStyle.DropDown, AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+            AutoCompleteSource = AutoCompleteSource.ListItems, MaxDropDownItems = 20,
+        };
+
+        private readonly Func<int, IReadOnlyList<string>> _valuesOf;
+        private string _typed = string.Empty;
+        public Button Remove { get; } = Ui.Secondary(new Button
+        {
+            Text = "×", Width = 28, Height = 25, Anchor = AnchorStyles.Left, Margin = new Padding(6, 3, 0, 3),
+            AccessibleName = "Remover condição",
+        });
+
+        /// <param name="valuesOf">The distinct values of a column, offered in the value list.</param>
+        public FilterRuleControls(IReadOnlyList<string> columns, Func<int, IReadOnlyList<string>> valuesOf, ToolTip tips)
+        {
+            _valuesOf = valuesOf;
+            Join.Width = 58;
+            Join.Margin = new Padding(0, 3, 8, 3);
+            Column.Dock = Value.Dock = DockStyle.Fill;
+            Column.Margin = Value.Margin = new Padding(0, 3, 8, 3);
+            Operator.Width = 140;
+            Operator.Margin = new Padding(0, 3, 8, 3);
+            foreach (var column in columns)
+                Column.Items.Add(column);
+            if (Column.Items.Count > 0)
+                Column.SelectedIndex = 0;
+            Operator.SelectedIndex = 0;
+            Join.SelectedIndex = 0;
+            FillValues();
+            tips.SetToolTip(Active, "Usar esta condição");
+            tips.SetToolTip(Join, "E: a linha precisa atender também a esta condição. OU: basta atender a esta ou ao grupo anterior.");
+            tips.SetToolTip(Remove, "Remover condição");
+            tips.SetToolTip(Value, "Escolha um valor da coluna ou digite. Em \"É um destes\", cada valor escolhido entra na lista, separado por \";\".");
+            Operator.SelectedIndexChanged += (_, _) => ShowValue();
+            Column.SelectedIndexChanged += (_, _) => FillValues();
+            Value.TextUpdate += (_, _) => _typed = Value.Text;
+            Value.SelectionChangeCommitted += (_, _) => AddToList();
+            ShowValue();
+        }
+
+        private bool IsList => Operator.SelectedItem?.ToString() == "É um destes";
+
+        /// <summary>Offers the values found in the chosen column, keeping what is typed.</summary>
+        private void FillValues()
+        {
+            var text = Value.Text;
+            Value.BeginUpdate();
+            Value.Items.Clear();
+            Value.Items.AddRange([.. _valuesOf(Column.SelectedIndex)]);
+            Value.EndUpdate();
+            Value.Text = text;
+        }
+
+        /// <summary>For "É um destes", picking a value adds it to the list instead of replacing it.</summary>
+        private void AddToList()
+        {
+            if (Value.SelectedItem?.ToString() is not { } picked)
+            {
+                _typed = Value.Text;
+                return;
+            }
+            if (!IsList)
+            {
+                _typed = picked;
+                return;
+            }
+            var parts = _typed.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+            if (!parts.Contains(picked, StringComparer.CurrentCultureIgnoreCase))
+                parts.Add(picked);
+            var joined = string.Join("; ", parts);
+            _typed = joined;
+            // The combo writes the picked item after this event, so the list is put back right after it.
+            Value.BeginInvoke(() =>
+            {
+                Value.Text = joined;
+                Value.SelectionStart = joined.Length;
+            });
+        }
+
+        private void ShowValue()
+        {
+            var op = Operator.SelectedItem?.ToString() ?? "";
+            Value.Enabled = SheetFilters.NeedsValue(op);
+        }
+
+        public SheetFilterRule ToRule() =>
+            new(Column.SelectedIndex, Operator.SelectedItem?.ToString() ?? "É igual a", Value.Text, Active.Checked, Join.SelectedIndex == 1);
+
+        public void Dispose()
+        {
+            foreach (Control control in new Control[] { Active, Lead, Join, Column, Operator, Value, Remove })
+                control.Dispose();
+        }
+    }
+
     private readonly RadioButton _fromText = new() { Text = "Digitar ou colar", AutoSize = true, Checked = true, Margin = new Padding(0, 0, 18, 0) };
     private readonly RadioButton _fromSheet = new() { Text = "Planilha do Excel (.xlsx)", AutoSize = true };
     private readonly Stack _textPanel = new() { AutoSize = true };
@@ -40,7 +145,33 @@ internal sealed class KmzPage : Page
     private readonly ComboBox _nameColumn = List();
     private readonly ComboBox _latitudeColumn = List();
     private readonly ComboBox _longitudeColumn = List();
+    private readonly ComboBox _streetColumn = List();
+    private readonly ComboBox _numberColumn = List();
+    private readonly ComboBox _typeColumn = List();
+    private readonly ComboBox _districtColumn = List();
+    private readonly ComboBox _cityColumn = List();
+    private readonly ComboBox _stateColumn = List();
+    private readonly ComboBox _postalColumn = List();
+    private readonly TextBox _cityText = new() { Width = 220, PlaceholderText = "ex.: Lavras" };
+    private readonly ComboBox _stateText = List();
+    private readonly WrapLabel _guessed = new() { ForeColor = Ui.Muted };
+    private readonly Button _locate = Ui.Secondary(new Button { Text = "Localizar endereços", AutoSize = true, Visible = false, Padding = new Padding(8, 2, 8, 2) });
+    private readonly Label _locateStatus = new() { AutoSize = true, ForeColor = Ui.Muted, Margin = new Padding(10, 7, 0, 0) };
     private readonly CheckBox _header = new() { Text = "A primeira linha tem os nomes das colunas", AutoSize = true, Checked = true };
+    private readonly TableLayoutPanel _filterGrid = new()
+    {
+        ColumnCount = 6, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Visible = false,
+        BackColor = Color.FromArgb(0xF7, 0xFA, 0xFC), Padding = new Padding(8, 6, 8, 6),
+    };
+    private readonly Label[] _filterHeaders =
+        [.. new[] { "", "", "Coluna", "Condição", "Valor", "" }.Select(text => new Label
+        {
+            Text = text, AutoSize = true, ForeColor = Ui.Muted, Margin = new Padding(0, 0, 8, 1),
+        })];
+    private readonly Button _addFilter = Ui.Secondary(new Button { Text = "+ Adicionar filtro", AutoSize = true, Padding = new Padding(8, 2, 8, 2) });
+    private readonly Label _filterSummary = new() { AutoSize = true, ForeColor = Ui.Muted, Margin = new Padding(10, 7, 0, 0) };
+    private readonly ToolTip _tips = new();
+    private readonly List<FilterRuleControls> _filterRules = [];
 
     private readonly PictureBox _preview = new() { Size = new Size(48, 48), SizeMode = PictureBoxSizeMode.CenterImage, Margin = new Padding(0, 4, 14, 0) };
     private readonly ComboBox _shape = List();
@@ -50,6 +181,7 @@ internal sealed class KmzPage : Page
     private readonly Label _status = new() { AutoSize = true, ForeColor = Ui.Muted };
     private readonly ListView _points = new() { View = View.Details, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.Nonclickable };
     private readonly WrapLabel _problems = new() { ForeColor = Ui.Bad };
+    private readonly WrapLabel _fixes = new() { ForeColor = Ui.Muted };
     private readonly Button _generate = Ui.Primary(new Button { Text = "Gerar KMZ", Font = Ui.BigButtonFont, Height = 44, Enabled = false });
     private readonly ProgressBar _progress = new() { Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 25, Height = 4, Visible = false };
     private readonly Button _openOutput = Ui.Secondary(new Button { Text = "Abrir arquivo", AutoSize = true, Enabled = false, Padding = new Padding(8, 2, 8, 2) });
@@ -61,6 +193,9 @@ internal sealed class KmzPage : Page
     private string? _imagePath;
     private string? _lastOutput;
     private PointList _current = PointList.Empty;
+    private SheetReading _reading = SheetReading.Empty;
+    private CancellationTokenSource? _locating;
+    private readonly TableLayoutPanel _iconFields;
     private int _lastShape;
     private bool _loading;
     private bool _busy;
@@ -92,17 +227,42 @@ internal sealed class KmzPage : Page
                          "Também aceita um dicionário Python: {\"Poste 12\": (-23.5505, -46.6333), \"CTO 3\": (-23.5510, -46.6340)}"),
                 top: 4, bottom: 8)
             .Add(Stack.Flow(new Label { Text = "Ordem das coordenadas:", AutoSize = true, Margin = new Padding(0, 6, 8, 0) }, _order));
+        _stateText.Items.Add(string.Empty);
+        _stateText.Items.AddRange([.. AddressText.States]);
+        _stateText.Width = 70;
         _sheetPanel
             .Add(Stack.Flow(chooseSheet, _sheetFile), bottom: 10)
-            .Add(Fields(("Aba", _sheet), ("Coluna do nome", _nameColumn), ("Coluna da latitude", _latitudeColumn),
-                ("Coluna da longitude", _longitudeColumn)), bottom: 6)
-            .Add(_header);
+            .Add(Fields(("Aba", _sheet), ("Coluna do nome", _nameColumn)), bottom: 8)
+            .Add(new Label { Text = "Onde fica cada ponto", AutoSize = true, Font = Ui.BoldFont }, bottom: 2)
+            .Add(_guessed, bottom: 6)
+            .Add(Fields(("Latitude", _latitudeColumn), ("Longitude", _longitudeColumn), ("Endereço ou rua", _streetColumn),
+                ("Número", _numberColumn)), bottom: 4)
+            .Add(Fields(("Tipo (Rua, Av.)", _typeColumn), ("Bairro", _districtColumn), ("Cidade", _cityColumn), ("UF", _stateColumn),
+                ("CEP", _postalColumn)), bottom: 6)
+            .Add(Stack.Flow(
+                new Label { Text = "Cidade, se a planilha não disser:", AutoSize = true, Margin = new Padding(0, 6, 8, 0) }, _cityText,
+                new Label { Text = "UF:", AutoSize = true, Margin = new Padding(12, 6, 6, 0) }, _stateText), bottom: 6)
+            .Add(_header)
+            .Add(new Label { Text = "Filtrar linhas", AutoSize = true, Font = Ui.BoldFont }, top: 12, bottom: 4)
+            .Add(_filterGrid)
+            .Add(Stack.Flow(_addFilter, _filterSummary), top: 6)
+            .Add(Stack.Flow(_locate, _locateStatus), top: 12)
+            .Add(Ui.Hint("Linhas com latitude e longitude usam as coordenadas; as outras são procuradas pelo endereço no " +
+                         "OpenStreetMap (só rua, número, bairro, cidade e UF são enviados), uma por segundo. O que for achado " +
+                         "fica guardado neste computador."), top: 4);
+        _filterGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _filterGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _filterGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+        _filterGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _filterGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
+        _filterGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
         var icon = new TableLayoutPanel { ColumnCount = 2, RowCount = 1, AutoSize = true };
         icon.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         icon.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         icon.Controls.Add(_preview, 0, 0);
-        icon.Controls.Add(Fields(("Formato", _shape), ("Cor", _color), ("Tamanho no mapa", _size)), 1, 0);
+        _iconFields = Fields(("Formato", _shape), ("Cor", _color), ("Tamanho no mapa", _size));
+        icon.Controls.Add(_iconFields, 1, 0);
 
         _points.Columns.Add("Nome", 240);
         _points.Columns.Add("Latitude", 110, HorizontalAlignment.Right);
@@ -125,6 +285,7 @@ internal sealed class KmzPage : Page
             .Add(_status, bottom: 4)
             .Add(_points, fill: true)
             .Add(_problems, top: 4)
+            .Add(_fixes, top: 2)
             .Add(_generate, top: 10)
             .Add(_progress, top: 4)
             .Add(Stack.Flow(_openOutput, _showOutput), top: 8), 700);
@@ -138,9 +299,17 @@ internal sealed class KmzPage : Page
         };
         _order.SelectedIndexChanged += (_, _) => Reparse();
         _sheet.SelectedIndexChanged += (_, _) => ShowColumns();
-        foreach (var column in new[] { _nameColumn, _latitudeColumn, _longitudeColumn })
+        foreach (var column in new[] { _nameColumn, _latitudeColumn, _longitudeColumn, _streetColumn, _numberColumn, _typeColumn,
+                     _districtColumn, _cityColumn, _stateColumn, _postalColumn, _stateText })
             column.SelectedIndexChanged += (_, _) => Reparse();
+        _cityText.TextChanged += (_, _) =>
+        {
+            _typing.Stop();
+            _typing.Start();
+        };
+        _locate.Click += (_, _) => Locate();
         _header.CheckedChanged += (_, _) => Reparse();
+        _addFilter.Click += (_, _) => AddFilterRule();
 
         _shape.SelectedIndexChanged += (_, _) => ShapeChanged();
         _color.DrawItem += DrawColor;
@@ -253,37 +422,161 @@ internal sealed class KmzPage : Page
         if (_loading || Table is not { } table)
             return;
         _loading = true;
+        foreach (var rule in _filterRules)
+            rule.Dispose();
+        _filterRules.Clear();
+        LayoutFilters();
         var header = table.Rows[0];
-        var (name, latitude, longitude) = SheetPoints.GuessColumns(table);
-        var named = name >= 0 || latitude >= 0 || longitude >= 0;
+        var guessed = ColumnGuesser.Guess(table, hasHeader: true);
+        var named = guessed != SheetColumns.None;
 
-        _nameColumn.Items.Clear();
-        _latitudeColumn.Items.Clear();
-        _longitudeColumn.Items.Clear();
-        _nameColumn.Items.Add("(sem nome: numerar os pontos)");
-        for (var i = 0; i < table.Columns; i++)
+        var labels = Enumerable.Range(0, table.Columns).Select(i =>
         {
             var letter = SheetTable.ColumnLetter(i);
             var title = i < header.Length ? header[i] : null;
-            var label = title is null ? letter : $"{letter} — {(title.Length > 40 ? title[..40] + "…" : title)}";
-            _nameColumn.Items.Add(label);
-            _latitudeColumn.Items.Add(label);
-            _longitudeColumn.Items.Add(label);
+            return title is null ? letter : $"{letter} — {(title.Length > 40 ? title[..40] + "…" : title)}";
+        }).ToArray();
+        foreach (var (combo, role) in RoleCombos)
+        {
+            combo.Items.Clear();
+            combo.Items.Add(role == ColumnRole.Name ? "(sem nome: numerar os pontos)" : "(nenhuma)");
+            combo.Items.AddRange(labels);
+            combo.SelectedIndex = guessed[role] + 1;
         }
-        _nameColumn.SelectedIndex = name + 1;
-        _latitudeColumn.SelectedIndex = latitude;
-        _longitudeColumn.SelectedIndex = longitude;
-        _header.Checked = named || (latitude < 0 && longitude < 0);
+        _header.Checked = named || !table.Rows[0].Any(cell => Coordinate.TryParse(cell, out _));
+        _guessed.Text = Guessed(guessed, labels);
         _loading = false;
         Reparse();
     }
 
-    private PointList ReadSheet()
+    private (ComboBox Combo, ColumnRole Role)[] RoleCombos =>
+    [
+        (_nameColumn, ColumnRole.Name), (_latitudeColumn, ColumnRole.Latitude), (_longitudeColumn, ColumnRole.Longitude),
+        (_streetColumn, ColumnRole.Street), (_numberColumn, ColumnRole.Number), (_typeColumn, ColumnRole.StreetType),
+        (_districtColumn, ColumnRole.District), (_cityColumn, ColumnRole.City), (_stateColumn, ColumnRole.State),
+        (_postalColumn, ColumnRole.PostalCode),
+    ];
+
+    /// <summary>The columns picked, as the combos say (the first item of each is "none").</summary>
+    private SheetColumns Columns => RoleCombos.Aggregate(SheetColumns.None, (columns, pair) => columns.With(pair.Role, pair.Combo.SelectedIndex - 1));
+
+    /// <summary>One sentence on what the sheet was read as, so the user checks it before anything else.</summary>
+    private static string Guessed(SheetColumns columns, string[] labels)
     {
-        if (Table is not { } table || _latitudeColumn.SelectedIndex < 0 || _longitudeColumn.SelectedIndex < 0)
-            return PointList.Empty;
-        return SheetPoints.Read(table, _nameColumn.SelectedIndex - 1, _latitudeColumn.SelectedIndex,
-            _longitudeColumn.SelectedIndex, _header.Checked);
+        string Letter(int column) => SheetTable.ColumnLetter(column);
+        var parts = new List<string>();
+        if (columns.HasCoordinates)
+            parts.Add($"coordenadas em {Letter(columns.Latitude)} e {Letter(columns.Longitude)}");
+        if (columns.Street >= 0)
+            parts.Add(columns.Number >= 0 ? $"rua em {Letter(columns.Street)} e número em {Letter(columns.Number)}"
+                : $"endereço junto (rua e número) em {Letter(columns.Street)}");
+        if (columns.StreetType >= 0)
+            parts.Add($"tipo da rua em {Letter(columns.StreetType)}");
+        if (columns.District >= 0)
+            parts.Add($"bairro em {Letter(columns.District)}");
+        if (columns.City >= 0)
+            parts.Add($"cidade em {Letter(columns.City)}");
+        if (columns.State >= 0)
+            parts.Add($"UF em {Letter(columns.State)}");
+        if (columns.PostalCode >= 0)
+            parts.Add($"CEP em {Letter(columns.PostalCode)}");
+        if (parts.Count == 0)
+            return labels.Length == 0 ? string.Empty : "Não reconheci as colunas: escolha abaixo onde estão as coordenadas ou o endereço.";
+        var text = "Previsto pela planilha: " + string.Join(", ", parts) + ".";
+        if (columns.HasAddress && columns.City < 0)
+            text += " Não há coluna de cidade: escreva a cidade abaixo.";
+        return text + " Confira e troque se precisar.";
+    }
+
+    private void AddFilterRule()
+    {
+        if (Table is not { } table)
+            return;
+        var header = table.Rows[0];
+        var columns = Enumerable.Range(0, table.Columns).Select(i =>
+        {
+            var title = _header.Checked && i < header.Length ? header[i] : null;
+            return title is null ? SheetTable.ColumnLetter(i) : $"{SheetTable.ColumnLetter(i)} — {title}";
+        }).ToArray();
+        var rule = new FilterRuleControls(columns, ColumnValues, _tips);
+        _filterRules.Add(rule);
+        rule.Active.CheckedChanged += (_, _) => Reparse();
+        rule.Join.SelectedIndexChanged += (_, _) => Reparse();
+        rule.Column.SelectedIndexChanged += (_, _) => Reparse();
+        rule.Operator.SelectedIndexChanged += (_, _) => Reparse();
+        rule.Value.TextChanged += (_, _) =>
+        {
+            _typing.Stop();
+            _typing.Start();
+        };
+        rule.Remove.Click += (_, _) =>
+        {
+            _filterRules.Remove(rule);
+            LayoutFilters();
+            rule.Dispose();
+            Reparse();
+        };
+        LayoutFilters();
+        rule.Value.Focus();
+        Reparse();
+    }
+
+    private const int MaxValueChoices = 1000;
+
+    /// <summary>The distinct values of a column of the chosen sheet, sorted, for the filter value lists.</summary>
+    private IReadOnlyList<string> ColumnValues(int column)
+    {
+        if (Table is not { } table || column < 0)
+            return [];
+        return [.. table.Rows.Skip(_header.Checked ? 1 : 0)
+            .Select(row => column < row.Length ? row[column]?.Trim() : null)
+            .Where(value => !string.IsNullOrEmpty(value))
+            .Select(value => value!)
+            .Distinct(StringComparer.CurrentCultureIgnoreCase)
+            .Order(StringComparer.CurrentCultureIgnoreCase)
+            .Take(MaxValueChoices)];
+    }
+
+    /// <summary>Puts the conditions in the grid, one per row; the first reads "Onde", the others E / OU.</summary>
+    private void LayoutFilters()
+    {
+        _filterGrid.SuspendLayout();
+        _filterGrid.Controls.Clear();
+        _filterGrid.RowStyles.Clear();
+        _filterGrid.RowCount = _filterRules.Count + 1;
+        for (var column = 0; column < _filterHeaders.Length; column++)
+            _filterGrid.Controls.Add(_filterHeaders[column], column, 0);
+        for (var i = 0; i < _filterRules.Count; i++)
+        {
+            var rule = _filterRules[i];
+            _filterGrid.Controls.Add(rule.Active, 0, i + 1);
+            _filterGrid.Controls.Add(i == 0 ? rule.Lead : rule.Join, 1, i + 1);
+            _filterGrid.Controls.Add(rule.Column, 2, i + 1);
+            _filterGrid.Controls.Add(rule.Operator, 3, i + 1);
+            _filterGrid.Controls.Add(rule.Value, 4, i + 1);
+            _filterGrid.Controls.Add(rule.Remove, 5, i + 1);
+        }
+        for (var row = 0; row < _filterGrid.RowCount; row++)
+            _filterGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _filterGrid.Visible = _filterRules.Count > 0;
+        _addFilter.Text = _filterRules.Count == 0 ? "+ Adicionar filtro" : "+ Adicionar condição";
+        _filterGrid.ResumeLayout();
+    }
+
+    private SheetReading ReadSheet()
+    {
+        var columns = Columns;
+        if (Table is not { } table || !columns.HasCoordinates && !columns.HasAddress)
+            return SheetReading.Empty;
+        var filters = _filterRules.Select(rule => rule.ToRule())
+            .Where(rule => rule.Column >= 0).ToArray();
+        var filtered = SheetFilters.Apply(table, filters, _header.Checked);
+        var skip = _header.Checked ? 1 : 0;
+        _filterSummary.Text = filters.Any(rule => rule.Active)
+            ? $"{filtered.Rows.Count - skip} de {table.Rows.Count - skip} linhas atendem aos filtros."
+            : _filterRules.Count == 0 ? "Sem filtros: todas as linhas entram." : "Nenhuma condição ativa: todas as linhas entram.";
+        var defaults = new AddressDefaults(_cityText.Text, _stateText.SelectedItem as string);
+        return SheetPoints.Read(filtered, columns, _header.Checked, defaults, GeoCache.Get);
     }
 
     /// <summary>Reads the points again and shows what was found, so mistakes show before the file is made.</summary>
@@ -293,7 +586,8 @@ internal sealed class KmzPage : Page
         if (_loading)
             return;
         var order = _order.SelectedIndex == 1 ? CoordinateOrder.LongitudeFirst : CoordinateOrder.LatitudeFirst;
-        _current = _fromText.Checked ? PointText.Parse(_text.Text, order) : ReadSheet();
+        _reading = _fromText.Checked ? SheetReading.Empty : ReadSheet();
+        _current = _fromText.Checked ? PointText.Parse(_text.Text, order) : _reading.Points;
         if (_fromText.Checked)
             SaveOptions();
 
@@ -305,18 +599,135 @@ internal sealed class KmzPage : Page
         _points.EndUpdate();
 
         var problems = _current.Problems;
+        var activeFilterCount = _filterRules.Count(rule => rule.Active.Checked);
         _status.Text = points.Count == 0 && problems.Count == 0
             ? _fromText.Checked
                 ? "Digite ou cole as coordenadas acima."
-                : Table is null ? "Escolha a planilha." : "Escolha as colunas da latitude e da longitude."
-            : (points.Count == 1 ? "1 ponto pronto" : $"{points.Count} pontos prontos")
+                : Table is null ? "Escolha a planilha."
+                : !Columns.HasCoordinates && !Columns.HasAddress
+                    ? "Escolha as colunas da latitude e da longitude, ou a do endereço."
+                    : _reading.Pending.Count > 0
+                        ? "Nenhum ponto pronto ainda: localize os endereços."
+                        : _filterRules.Any(rule => rule.Active.Checked)
+                            ? "Nenhum ponto corresponde aos filtros ativos."
+                            : "Escolha as colunas da latitude e da longitude, ou a do endereço."
+            : (points.Count == 1 ? "1 ponto pronto" : $"{points.Count} pontos prontos") + Origins()
               + (points.Count > MaxPreviewRows ? $" (mostrando os primeiros {MaxPreviewRows})" : string.Empty)
-              + (problems.Count == 0 ? "." : problems.Count == 1 ? " · 1 entrada com problema:" : $" · {problems.Count} entradas com problema:");
+              + (activeFilterCount > 0 ? $" · {activeFilterCount} filtro(s) ativo(s)" : string.Empty)
+              + (problems.Count == 0 ? "." : problems.Count == 1 ? " · 1 entrada ficou de fora:" : $" · {problems.Count} entradas ficaram de fora:");
         const int shown = 4;
         _problems.Text = string.Join("\n", problems.Take(shown))
                          + (problems.Count > shown ? $"\n... e mais {problems.Count - shown}." : string.Empty);
         _problems.Visible = problems.Count > 0;
-        _generate.Enabled = !_busy && points.Count > 0;
+        ShowFixes(_current.Fixes);
+        ShowLocate();
+        _generate.Enabled = !_busy && _locating is null && points.Count > 0;
+    }
+
+    /// <summary>" (3 pelas coordenadas, 5 pelo endereço: 1 no número, 4 na rua)".</summary>
+    private string Origins()
+    {
+        var byAddress = _reading.Located.Where(p => p.Key != GeoPrecision.City).Sum(p => p.Value);
+        if (byAddress == 0)
+            return string.Empty;
+        var detail = new List<string>();
+        foreach (var (precision, words) in new[] { (GeoPrecision.Number, "no número"), (GeoPrecision.Street, "só na rua"), (GeoPrecision.District, "só no bairro") })
+        {
+            if (_reading.Located.GetValueOrDefault(precision) is var count and > 0)
+                detail.Add($"{count} {words}");
+        }
+        return $" ({_reading.FromCoordinates} pelas coordenadas, {byAddress} pelo endereço: {string.Join(", ", detail)})";
+    }
+
+    /// <summary>Offers to look for the addresses not found yet, with how long it takes.</summary>
+    private void ShowLocate()
+    {
+        if (_locating is not null)
+            return;
+        var pending = _fromText.Checked ? 0 : _reading.Pending.Count;
+        _locate.Visible = pending > 0;
+        _locate.Text = pending == 1 ? "Localizar 1 endereço" : $"Localizar {pending:N0} endereços";
+        _locateStatus.Text = pending > 0 ? $"leva cerca de {Duration(AddressLocator.Estimate(pending))}" : string.Empty;
+    }
+
+    private static string Duration(TimeSpan time) =>
+        time.TotalMinutes < 1 ? "1 minuto"
+        : time.TotalHours < 1 ? $"{Math.Ceiling(time.TotalMinutes):0} minutos"
+        : $"{Math.Floor(time.TotalHours):0} h {time.Minutes:0} min";
+
+    /// <summary>Looks for the pending addresses, a second each, showing the points as they are found. Clicking again stops.</summary>
+    private async void Locate()
+    {
+        if (_locating is { } running)
+        {
+            running.Cancel();
+            return;
+        }
+        var pending = _reading.Pending;
+        if (pending.Count == 0)
+            return;
+        if (pending.Count > 500 && !Dialogs.Confirm(this, $"{pending.Count:N0} endereços para localizar",
+                $"O serviço gratuito do OpenStreetMap responde um endereço por segundo: isso leva cerca de " +
+                $"{Duration(AddressLocator.Estimate(pending.Count))}, e ele pede uso moderado.\n\n" +
+                "Dá para parar quando quiser: o que já foi achado fica guardado e não é procurado de novo. Se puder, " +
+                "use os filtros para localizar só as linhas que precisa.", "Localizar", "Cancelar"))
+            return;
+
+        using var cancel = new CancellationTokenSource();
+        _locating = cancel;
+        _locate.Text = "Parar";
+        _generate.Enabled = false;
+        var progress = new Progress<(int Done, int Total)>(p =>
+        {
+            _locateStatus.Text = $"Localizando: {p.Done:N0} de {p.Total:N0}...";
+            if (p.Done % 10 == 0)
+                Reparse();
+        });
+        string? stopped = null;
+        try
+        {
+            using var geocoder = new NominatimGeocoder();
+            var done = await AddressLocator.RunAsync(pending, geocoder, progress, cancel.Token);
+            _locating = null;
+            Reparse();
+            if (cancel.IsCancellationRequested)
+                stopped = $"Parado depois de {done:N0}; o que foi achado ficou guardado.";
+        }
+        catch (AppException e)
+        {
+            _locating = null;
+            Reparse();
+            Dialogs.Warn(this, "A busca dos endereços parou", e.Message);
+        }
+        finally
+        {
+            _locating = null;
+            ShowLocate();
+            if (stopped is not null)
+                _locateStatus.Text = stopped;
+            _generate.Enabled = !_busy && _current.Points.Count > 0;
+        }
+    }
+
+    /// <summary>One line on what was corrected; the details are in its tooltip.</summary>
+    private void ShowFixes(IReadOnlyList<string> fixes)
+    {
+        var repeated = fixes.Count(fix => fix.EndsWith("repetida, ignorada.", StringComparison.Ordinal));
+        var swapped = fixes.Count(fix => fix.Contains("trocadas", StringComparison.Ordinal));
+        var typos = fixes.Count(fix => fix.Contains("digitada", StringComparison.Ordinal));
+        var decimals = fixes.Count(fix => fix.Contains("lida como", StringComparison.Ordinal)) - typos;
+        var parts = new List<string>();
+        if (typos > 0)
+            parts.Add(typos == 1 ? "1 coordenada com erro de digitação" : $"{typos} coordenadas com erro de digitação");
+        if (decimals > 0)
+            parts.Add(decimals == 1 ? "1 coordenada sem vírgula decimal" : $"{decimals} coordenadas sem vírgula decimal");
+        if (swapped > 0)
+            parts.Add(swapped == 1 ? "1 linha com latitude e longitude trocadas" : $"{swapped} linhas com latitude e longitude trocadas");
+        if (repeated > 0)
+            parts.Add(repeated == 1 ? "1 linha repetida ignorada" : $"{repeated} linhas repetidas ignoradas");
+        _fixes.Text = parts.Count == 0 ? string.Empty : "Corrigido automaticamente: " + string.Join(", ", parts) + ".";
+        _fixes.Visible = parts.Count > 0;
+        _tips.SetToolTip(_fixes, string.Join("\n", fixes.Take(30)) + (fixes.Count > 30 ? $"\n... e mais {fixes.Count - 30}." : string.Empty));
     }
 
     private static string Degrees(double value) => value.ToString("0.000000", CultureInfo.CurrentCulture);
@@ -397,9 +808,19 @@ internal sealed class KmzPage : Page
             _loading = false;
         }
         _lastShape = _shape.SelectedIndex;
-        _color.Enabled = !UsesImage;
+        ShowColorField();
         ShowIcon();
         SaveOptions();
+    }
+
+    /// <summary>The color only paints the drawn shapes, so it is hidden while the icon is an image.</summary>
+    private void ShowColorField()
+    {
+        var shown = !UsesImage;
+        _color.Visible = shown;
+        if (_iconFields.GetControlFromPosition(1, 0) is { } label)
+            label.Visible = shown;
+        _iconFields.ColumnStyles[1] = shown ? new ColumnStyle(SizeType.Percent, 100f / 3) : new ColumnStyle(SizeType.Absolute, 0);
     }
 
     private bool ChooseImage()
@@ -485,6 +906,21 @@ internal sealed class KmzPage : Page
             return;
         Reparse();
         var points = _current.Points;
+        if (_reading.Pending.Count > 0 && !_fromText.Checked)
+        {
+            var heading = $"{_reading.Pending.Count:N0} endereço(s) ainda não localizado(s)";
+            var text = $"Eles não entram no mapa até serem localizados (leva cerca de {Duration(AddressLocator.Estimate(_reading.Pending.Count))}).";
+            var answer = points.Count == 0
+                ? Dialogs.Choose(this, TaskDialogIcon.Warning, heading, text, "Localizar agora", "Cancelar") is 0 ? 0 : 2
+                : Dialogs.Choose(this, TaskDialogIcon.Warning, heading, text, "Localizar agora", $"Gerar só com os {points.Count} prontos", "Cancelar");
+            if (answer == 0)
+            {
+                Locate();
+                return;
+            }
+            if (answer != 1 || points.Count == 0)
+                return;
+        }
         if (points.Count == 0)
             return;
         if (_current.Problems.Count > 0 && !Dialogs.Confirm(this, "Algumas entradas não foram entendidas",
@@ -557,7 +993,9 @@ internal sealed class KmzPage : Page
     {
         if (disposing)
         {
+            _locating?.Cancel();
             _typing.Dispose();
+            _tips.Dispose();
             _preview.Image?.Dispose();
         }
         base.Dispose(disposing);

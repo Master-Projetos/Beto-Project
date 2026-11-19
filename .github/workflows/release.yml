@@ -1,0 +1,38 @@
+# Publishes a new version for the app's updater: push a tag such as v2.2.0 and this builds the
+# executable (without the client's templates, which are not in the repository) and creates the release.
+# The installed copies find it the next time they open.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Test
+        run: dotnet test tests/ListaMateriais.Tests --configuration Release
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          dotnet publish src/ListaMateriais -p:PublishProfile=win-x64 -p:EmbedTemplates=false -p:Version=$version
+          $hash = (Get-FileHash dist/ListaMateriais.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path dist/ListaMateriais.exe.sha256 -Value "$hash  ListaMateriais.exe" -NoNewline
+
+      - name: Create release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create '${{ github.ref_name }}' dist/ListaMateriais.exe dist/ListaMateriais.exe.sha256 --title '${{ github.ref_name }}' --generate-notes

@@ -11,6 +11,8 @@ internal static class Program
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) => ShowCrash(e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => ShowCrash(e.ExceptionObject as Exception);
+        Updater.CleanUp();
+        Config.KeepBuiltInTemplates();
         Application.Run(new MainForm());
     }
 
