@@ -12,6 +12,9 @@ internal sealed class MainForm : Form
     private readonly Panel _content = new() { Dock = DockStyle.Fill, BackColor = Color.White };
     private readonly GeneratePage _generate;
     private readonly KmzPage _kmz;
+    private readonly SimplifyPage _simplify;
+    private readonly CheckPage _check;
+    private readonly UpdateBanner _updates = new();
 
     public MainForm()
     {
@@ -32,6 +35,8 @@ internal sealed class MainForm : Form
         var headers = new HeadersPage();
         _generate = new GeneratePage(templates, headers);
         _kmz = new KmzPage();
+        _simplify = new SimplifyPage();
+        _check = new CheckPage();
 
         var pane = new TableLayoutPanel
         {
@@ -43,7 +48,7 @@ internal sealed class MainForm : Form
             using var line = new Pen(Color.FromArgb(0xE0, 0xE0, 0xE0));
             e.Graphics.DrawLine(line, pane.Width - 1, 0, pane.Width - 1, pane.Height);
         };
-        foreach (var page in new Page[] { _generate, _kmz, templates, headers, new SettingsPage(), new AboutPage() })
+        foreach (var page in new Page[] { _generate, _kmz, _simplify, _check, templates, headers, new SettingsPage(), new AboutPage(_updates) })
         {
             var button = new NavButton(page.Glyph, page.Title);
             button.CheckedChanged += (_, _) =>
@@ -60,8 +65,10 @@ internal sealed class MainForm : Form
         pane.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         pane.Controls.Add(new Panel { Height = 0, BackColor = Ui.Pane });
 
-        // Added first so it docks last and takes what the pane leaves.
+        // Docked in reverse order: the pane takes the left side, the update strip the top of what is left,
+        // and the page the rest.
         Controls.Add(_content);
+        Controls.Add(_updates);
         Controls.Add(pane);
 
         // OLE drag and drop only works on an STA thread.
@@ -76,7 +83,11 @@ internal sealed class MainForm : Form
         foreach (var (_, other) in _pages)
             other.Visible = other == page;
         // Enter generates on the pages that have something to generate.
-        AcceptButton = page == _generate ? _generate.MainButton : page == _kmz ? _kmz.MainButton : null;
+        AcceptButton = page == _generate ? _generate.MainButton
+            : page == _kmz ? _kmz.MainButton
+            : page == _simplify ? _simplify.MainButton
+            : page == _check ? _check.MainButton
+            : null;
     }
 
     private Page Current => _pages.First(p => p.Button.Checked).Page;
@@ -112,7 +123,7 @@ internal sealed class MainForm : Form
     {
         if (keyData == (Keys.Control | Keys.O))
         {
-            if (Current != _generate && Current != _kmz)
+            if (Current != _generate && Current != _kmz && Current != _simplify && Current != _check)
                 GoTo(_generate);
             Current.Browse();
             return true;
@@ -141,8 +152,30 @@ internal sealed class MainForm : Form
             WindowState = FormWindowState.Maximized;
     }
 
+    protected override async void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        if (!Config.LoadCheckUpdates() || !Updater.CanUpdateItself)
+            return;
+        try
+        {
+            await _updates.CheckAsync(userAsked: false);
+        }
+#pragma warning disable CA1031 // A check nobody asked for must never interrupt the user; it is only logged.
+        catch (Exception error)
+#pragma warning restore CA1031
+        {
+            System.Diagnostics.Trace.TraceWarning("Falha ao procurar atualização: {0}", error);
+        }
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        if (_updates.Installing && e.CloseReason == CloseReason.UserClosing
+            && !Dialogs.Confirm(this, "A atualização ainda está sendo baixada",
+                "Se fechar agora, ela é cancelada e o programa continua na versão atual.", "Fechar mesmo assim",
+                "Continuar baixando", warning: true))
+            e.Cancel = true;
         base.OnFormClosing(e);
         if (e.Cancel || WindowState == FormWindowState.Minimized)
             return;

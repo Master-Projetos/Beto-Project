@@ -139,7 +139,7 @@ internal static class MarkerIcon
         return points;
     }
 
-    private static byte[] Png(Bitmap bitmap)
+    internal static byte[] Png(Bitmap bitmap)
     {
         using var stream = new MemoryStream();
         bitmap.Save(stream, ImageFormat.Png);

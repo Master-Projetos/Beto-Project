@@ -19,7 +19,7 @@ internal static partial class Config
     public static readonly string Template =
         Path.Combine(AppContext.BaseDirectory, "templates", "lista_materiais.xlsx");
 
-    private static readonly string SettingsFolder = Path.Combine(
+    public static readonly string SettingsFolder = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ListaMateriais");
 
     public static readonly string SettingsFile = Path.Combine(SettingsFolder, "settings.json");
@@ -198,8 +198,48 @@ internal static partial class Config
         }
     }
 
+    /// <summary>
+    /// True when there is a default template: built into this executable, or kept from an earlier one
+    /// (the versions downloaded by the updater come without the client's templates).
+    /// </summary>
     public static bool HasBuiltInTemplate =>
-        typeof(Config).Assembly.GetManifestResourceInfo(BuiltInTemplateResource) is not null;
+        typeof(Config).Assembly.GetManifestResourceInfo(BuiltInTemplateResource) is not null || File.Exists(BuiltInTemplateFile);
+
+    /// <summary>
+    /// Copies the templates built into this executable to the settings folder, so they stay available
+    /// after an update replaces it with a version built without them. The spreadsheet is copied only
+    /// when missing (the user may have edited it); the Word templates are kept up to date.
+    /// </summary>
+    public static void KeepBuiltInTemplates()
+    {
+        try
+        {
+            if (!File.Exists(BuiltInTemplateFile))
+                UnpackBuiltInTemplate();
+            foreach (var kind in new[] { ReportKind.Tcr, ReportKind.Tce })
+            {
+                using var resource = typeof(Config).Assembly.GetManifestResourceStream(WordTemplate(kind).Resource);
+                if (resource is null)
+                    continue;
+                using var buffer = new MemoryStream();
+                resource.CopyTo(buffer);
+                var kept = KeptWordTemplate(kind);
+                if (File.Exists(kept) && buffer.ToArray().AsSpan().SequenceEqual(File.ReadAllBytes(kept)))
+                    continue;
+                Directory.CreateDirectory(SettingsFolder);
+                File.WriteAllBytes(kept + ".tmp", buffer.ToArray());
+                File.Move(kept + ".tmp", kept, overwrite: true);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning("Não foi possível guardar os modelos padrão: {0}", e.Message);
+        }
+    }
+
+    /// <summary>Where the Word template built into the executable is kept for the versions without it.</summary>
+    private static string KeptWordTemplate(ReportKind kind) =>
+        Path.Combine(SettingsFolder, $"modelo-padrao-{kind.ToString().ToLowerInvariant()}.docx");
 
     public static bool IsBuiltInTemplate(string path) =>
         string.Equals(Path.GetFullPath(path), BuiltInTemplateFile, StringComparison.OrdinalIgnoreCase);
@@ -251,7 +291,8 @@ internal static partial class Config
     }
 
     public static bool HasBuiltInWordTemplate(ReportKind kind) =>
-        typeof(Config).Assembly.GetManifestResourceInfo(WordTemplate(kind).Resource) is not null;
+        typeof(Config).Assembly.GetManifestResourceInfo(WordTemplate(kind).Resource) is not null
+        || File.Exists(KeptWordTemplate(kind));
 
     /// <summary>
     /// The Word template of a report: the one picked by the user, the one next to the executable, or the
@@ -264,7 +305,7 @@ internal static partial class Config
 
         using var stream = typeof(Config).Assembly.GetManifestResourceStream(WordTemplate(kind).Resource);
         if (stream is null)
-            return null;
+            return File.Exists(KeptWordTemplate(kind)) ? Files.ReadAllBytesShared(KeptWordTemplate(kind)) : null;
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
         return buffer.ToArray();
@@ -274,8 +315,12 @@ internal static partial class Config
     public static void SaveWordTemplatePath(ReportKind kind, string? path) =>
         Write(WordTemplate(kind).Key, path is null ? null : Path.GetFullPath(path));
 
-    /// <summary>What to generate from a PDF report; Word (TCR) until the user chooses otherwise.</summary>
-    public static PdfOutput LoadPdfOutput() => ReadEnum("pdfOutput", PdfOutput.Word);
+    /// <summary>What to generate from a PDF report, one or more files; Word (TCR) until the user chooses otherwise.</summary>
+    public static PdfOutput LoadPdfOutput() =>
+        Enum.TryParse<PdfOutput>(Read<string?>("pdfOutput", null), out var value) && value != PdfOutput.None
+                                                                                 && (value & ~PdfOutput.All) == 0
+            ? value
+            : PdfOutput.Word;
 
     public static void SavePdfOutput(PdfOutput output) => Write("pdfOutput", output.ToString());
 
@@ -325,6 +370,33 @@ internal static partial class Config
         ["longitudeFirst"] = options.LongitudeFirst,
     });
 
+    /// <summary>How the last simple map was made: only the cables (true) or every group; color name; line width.</summary>
+    public static (bool CablesOnly, string Color, int Width) LoadSimplifyOptions() =>
+        (Read("simplifyCablesOnly", true), Read("simplifyCableColor", Kmz.MapColors.NeonName), Read("simplifyWidth", 10));
+
+    public static void SaveSimplifyOptions(bool cablesOnly, string color, int width)
+    {
+        Write("simplifyCablesOnly", cablesOnly);
+        Write("simplifyCableColor", color);
+        Write("simplifyWidth", width);
+    }
+
+    /// <summary>How the last map check was made: join distance and longest span, in meters, and whether spans are checked.</summary>
+    public static (int JoinDistance, bool CheckSpans, int MaxSpan) LoadCheckOptions() =>
+        (Math.Clamp(Read("checkJoinDistance", 10), 1, 100), Read("checkSpans", false), Math.Clamp(Read("checkMaxSpan", 80), 10, 1000));
+
+    public static void SaveCheckOptions(int joinDistance, bool checkSpans, int maxSpan)
+    {
+        Write("checkJoinDistance", joinDistance);
+        Write("checkSpans", checkSpans);
+        Write("checkMaxSpan", maxSpan);
+    }
+
+    /// <summary>Whether the app looks for a new version when it opens; on until the user turns it off.</summary>
+    public static bool LoadCheckUpdates() => Read("checkUpdates", true);
+
+    public static void SaveCheckUpdates(bool check) => Write("checkUpdates", check);
+
     /// <summary>Where the window was when the app closed: left, top, width, height and whether it was maximized.</summary>
     public static (int Left, int Top, int Width, int Height, bool Maximized)? LoadWindow()
     {
@@ -349,16 +421,22 @@ internal static partial class Config
 internal sealed record KmzOptions(Kmz.MarkerShape Shape = Kmz.MarkerShape.Pin, int Color = 0xE53935, int Size = 1,
     bool LongitudeFirst = false);
 
+/// <summary>The files generated from a PDF report; several can be chosen at once.</summary>
+[Flags]
 internal enum PdfOutput
 {
+    None = 0,
+
     /// <summary>The TCR Word document.</summary>
-    Word,
+    Word = 1,
 
     /// <summary>The TCE Word document.</summary>
-    Tce,
+    Tce = 2,
 
     /// <summary>The material list spreadsheet (.xlsx).</summary>
-    Spreadsheet,
+    Spreadsheet = 4,
+
+    All = Word | Tce | Spreadsheet,
 }
 
 internal enum OutputLayout

@@ -1,14 +1,14 @@
 namespace ListaMateriais.Pages;
 
-/// <summary>Version, author and the keyboard shortcuts.</summary>
+/// <summary>Version, updates, author and the keyboard shortcuts.</summary>
 internal sealed class AboutPage : Page
 {
     private const string AuthorUrl = "https://github.com/23Edu4rd0";
 
     public override string Title => "&Sobre";
-    public override string Glyph => "\uE946";
+    public override string Glyph => "";
 
-    public AboutPage()
+    public AboutPage(UpdateBanner updates)
     {
         // The informational version may carry a "+commit" suffix after the number.
         var version = Application.ProductVersion.Split('+')[0];
@@ -19,17 +19,38 @@ internal sealed class AboutPage : Page
                 Dialogs.Warn(this, "Não foi possível abrir o link", AuthorUrl);
         };
 
+        var status = new Label
+        {
+            AutoSize = true, ForeColor = Ui.Muted, Margin = new Padding(10, 7, 0, 0),
+            Text = Updater.CanUpdateItself ? string.Empty : "Esta cópia (de desenvolvimento) não se atualiza sozinha.",
+        };
+        var check = Ui.Secondary(new Button { Text = "Procurar atualizações", AutoSize = true, Padding = new Padding(8, 2, 8, 2) });
+        check.Click += async (_, _) =>
+        {
+            check.Enabled = false;
+            status.Text = "Verificando...";
+            status.Text = await updates.CheckAsync(userAsked: true);
+            check.Enabled = true;
+        };
+        var automatic = new CheckBox { Text = "Procurar sozinho ao abrir o programa", AutoSize = true, Checked = Config.LoadCheckUpdates() };
+        automatic.CheckedChanged += (_, _) => Config.TrySave(() => Config.SaveCheckUpdates(automatic.Checked));
+
         SetContent(new Stack()
             .Title(Dialogs.AppTitle, $"Versão {version}")
-            .Add(Ui.Hint("Gera a lista de materiais (planilha), o TCR/TCE (Word) e mapas de pontos (KMZ) a partir dos " +
-                         "documentos do projeto, para você não ter que preencher tudo à mão."), bottom: 20)
+            .Add(Ui.Hint("Gera a lista de materiais (planilha), o TCR/TCE (Word) e mapas KMZ a partir dos " +
+                         "documentos do projeto, e simplifica mapas KMZ complicados, para você não ter que fazer tudo à mão."), bottom: 20)
+            .Add(Ui.Hint("A preguiça é a mãe do progresso. Se o homem não tivesse preguiça de caminhar, não teria inventado a roda. ~ Mario Quintana, 1973 "), bottom: 20)
+            .Caption("Atualizações")
+            .Add(Stack.Flow(check, status))
+            .Add(automatic, top: 4, bottom: 20)
             .Caption("Criado por")
             .Add(author, bottom: 20)
             .Caption("Atalhos do teclado")
             .Add(Ui.Hint("Ctrl+O — escolher o arquivo da página atual\n" +
-                         "Ctrl+1 a Ctrl+6 — trocar de página\n" +
+                         "Ctrl+1 a Ctrl+8 — trocar de página\n" +
                          "Enter — gerar\n" +
-                         "Arrastar um arquivo para a janela — abrir na página certa (PDF e Word em Gerar, Excel em Mapa)"))
-            .Spring(), 380);
+                         "Arrastar um arquivo para a janela — abrir na página certa (PDF e Word em Gerar, Excel em Mapa, " +
+                         "KMZ/KML em Simplificar ou, com Conferir aberta, em Conferir)"))
+            .Spring(), 460);
     }
 }

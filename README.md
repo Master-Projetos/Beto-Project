@@ -23,9 +23,14 @@ checked on the spot. The city and the date come from the report header; the PDF 
 cell is left to fill by hand. Each category's quantities × prices are checked against the
 subtotal printed in the PDF, and any mismatch is shown as a warning in the result.
 
-### Word (TCR) or spreadsheet from the PDF
+### Word (TCR) and spreadsheet from the PDF
 
-After picking a PDF, the "Gerar" page asks what to generate (the choice is remembered):
+After picking a PDF, the "Gerar" page asks what to generate. Any combination can be checked (the
+choice is remembered): the PDF is read and the tables are picked once, then each file is generated
+in turn (the Word documents first, each with its report data and where to save it, then the
+spreadsheet). A file whose dialog is cancelled is skipped and the others still come out; the result
+lists them all and "Abrir todos" opens them. From a TCE/TCR saved as PDF only the spreadsheet can
+be made, so the Word choices are dropped with a note.
 
 - **TCR (Word)**: fills the TCR template with the report: designer (projetista), date, study
   summary (ports, cost per port, city, launch, CAPEX, safety coefficient, deadline, labor), area
@@ -67,27 +72,111 @@ and Google Maps (My Maps). The points come from:
   `{"A": {"lat": -23.5, "lon": -46.6}}`, `[{"nome": "A", "lat": -23.5, "lon": -46.6}]`,
   `[("A", -23.5, -46.6)]`, or column-wise `{"nome": [...], "lat": [...], "lon": [...]}`. It is parsed
   as a literal, never executed;
-- **an Excel sheet** (`.xlsx`): pick the sheet and the columns of the name, latitude and longitude
-  (preselected when the header row names them).
+- **an Excel sheet** (`.xlsx`) with coordinates, addresses, or both. The columns are predicted from
+  their titles *and* their content, and shown for checking: name, latitude, longitude, the street
+  (or the whole address in one cell), number, street type, district, city, state and CEP. A title
+  alone is not trusted: a "TIPO" column holding TORRE/POP is not the street type, "Nº CONTRATO" is
+  not the house number, a three-letter "SIGLA" is not the state, and the nickname ("APELIDO") is
+  preferred to a designation code for the marker name.
+
+  An address in one cell is split the way people type it: "RUA X, Nº 138", "R X N48", "AV X 790",
+  "…, apto 3", "… - Centro", "ESTRADA X, S/N", "ROD BR381 KM 100,5", a CEP anywhere, or a street
+  without its type. "CIDADE / UF" is split too. When the sheet has no city (or a row leaves it
+  empty), the city and UF typed on the page are used.
+
+  Rows with a valid latitude and longitude keep them; the others are looked up by address with
+  "Localizar endereços", in OpenStreetMap's free search (Nominatim): one request a second, one at a
+  time, a generic client name, and only street, number, district, city and state are sent. Each
+  address is asked once (same address typed differently included) and the places found are kept in
+  `%APPDATA%\ListaMateriais\enderecos.json`, so a second run is instant. A run can be stopped at any
+  time; above 500 addresses the app asks first. Each point says in the KMZ how it was found: on the
+  number, only on the street (most Brazilian streets have no house numbers on the map), or only in
+  the district. When only the city is found the row is left out and listed, instead of piling up on
+  the city center; addresses not found are listed too.
 
 The points found (and the entries that could not be read, with the reason) are listed before the
 file is generated. The marker is a shape (pin, circle, square, triangle, diamond, star) in the
 color and size you choose, or a picture from the computer; it is stored inside the KMZ, so it shows
 on any machine.
 
+## Simplifying a map (KMZ)
+
+The "Simplificar KMZ" page takes a busy technical `.kmz`/`.kml` (thousands of points, cables drawn
+in short pieces, dozens of colors, descriptions and data tables) and writes a map anyone can read:
+
+- **Só os cabos** (the default): every line of the map becomes a cable, all in one layer of one color
+  (neon green #39FF14 unless another is picked; amarelo, ciano, rosa and laranja neon and branco are there too) with a dark edge drawn under each line so it stands out on any ground, and thick ("Grossos" 6 px, "Bem grossos" 10 px, "Grossíssimos" 14 px);
+  points (CTO, CEO, splice boxes, poles) and areas are left out. Lines that are not cables can be unchecked;
+- **Tudo**: every group kept, as below.
+
+In "Tudo":
+
+- the drawings are grouped by folder and color; each group becomes one legend entry, named after
+  its folder (tidied up: `CABOS_AS` → "Cabos as") or after its color ("Linhas vermelhas"). The names
+  can be changed in the list (F2); groups given the same name become one; unchecked groups are left out;
+- each entry gets one strong color (red stays red when it is free), lines are drawn thick, points
+  as big round markers without labels, and a legend is drawn in the corner of Google Earth;
+- line pieces whose ends meet are joined (branches stay apart) and straightened, nearby points become
+  one marker ("Postes (4)"), and very short lines are dropped. "Quanto simplificar" sets how far
+  this goes (Pouco: 2 m, nothing joined; Médio: 8 m, points within 40 m; Bastante: 25 m, 150 m);
+- descriptions, data tables, photos, overlays and links to other files are not carried over.
+
+## Checking a map (KMZ)
+
+"Conferir KMZ" reviews a network map before it goes out and lists what looks wrong, red for errors
+and yellow for warnings:
+
+- **Desenhado duas vezes** (error): the same cable on top of itself, or the same box twice in one spot.
+  Two differently named cables on one trace are only a warning (**Mesmo traçado**); a CEO and a CTO on
+  the same pole are fine.
+- **Sem nome**: left with Google Earth's default name ("Caminho sem título", "Untitled Path"...).
+- **Nome repetido**: two separate drawings with one name (pieces of one cable drawn end to end may share it).
+- **Ponta solta**: a cable end with no box, point or other cable within the join distance (10 m by default).
+- **Ponto sem cabo**: a box no cable passes near.
+- **Cabo muito curto**: under 3 m, a leftover of drawing.
+- **Coordenada errada** (error) and **Fora do Brasil**: zeroed coordinates, or latitude and longitude swapped.
+- **Vão longo**, off by default: a stretch between two vertices longer than the limit (80 m). Vertices
+  are not always poles, so this one is noisy on route traces.
+
+Folders that are on the map only for reference (backbone, existing network elsewhere) can be unchecked:
+the project's cables may still connect to them, but their own issues are left out. A double click copies
+the coordinates of an issue, "Copiar lista" copies them all for Excel, and "Salvar KMZ com os problemas
+marcados" writes one marker per issue, to open in Google Earth over the original map. Port counts,
+cable types and declared lengths are not checked: the maps do not carry them in a form that can be read.
+
+## Updates
+
+On start, the published executable asks GitHub for the latest release of this repository and, when
+it is newer, offers it in a strip at the top of the window. "Atualizar agora" downloads it next to
+the executable, checks its SHA-256, renames the running file to `.old`, puts the new one in its
+place and restarts (the `.old` file is deleted on the next start). The "Sobre" page checks on demand
+and turns the automatic check off. Copies run with `dotnet run` or from Visual Studio never replace
+themselves.
+
+To publish a version, push a tag: `git tag v2.2.0 && git push origin v2.2.0`. The `Release`
+workflow runs the tests, builds the executable with `-p:EmbedTemplates=false` (the repository is
+public and the client's templates are not in it) and attaches `ListaMateriais.exe` and its
+`.sha256` to the release. The templates of the copy handed out before keep working: on every start
+the app copies the templates built into it to `%APPDATA%\ListaMateriais\`, and the versions without
+them use those copies. A machine that never had a copy with templates asks for them in "Modelos".
+
 ## Code layout
 
 ```
 src/ListaMateriais/
   Program.cs, MainForm.cs   entry point; window with the navigation pane, file drop and shortcuts
-  Pages/                    one file per page (Gerar, Mapa, Modelos, Cabeçalhos, Configurações, Sobre)
+  Pages/                    one file per page (Gerar, Mapa, Simplificar, Conferir, Modelos, Cabeçalhos, Configurações, Sobre)
   Ui.cs, Dialogs.cs         shared look, layout helpers and the task dialogs
   *Form.cs                  dialogs of the generation flow (table selection, report data, placeholders)
   DocxReader.cs             material tables of a Word document
   PdfReader.cs              Route Map report; TcePdfParser.cs reads a TCE/TCR saved as PDF
   XlsxWriter.cs             fills the spreadsheet template
   TcrWriter.cs, Sheet.cs, WordRefresh.cs   fill the TCR/TCE Word template
-  Kmz/                      point parsing (text, Python literal, xlsx), marker drawing and the KMZ writer
+  Kmz/                      point parsing (text, Python literal, xlsx), column prediction (SheetColumns), addresses
+                            (AddressText) and their lookup (Geocoder), marker drawing and the KMZ writer;
+                            KmlReader, MapSimplifier and SimpleKmzWriter for the simplified map;
+                            MapChecker and IssueKmzWriter for the map check
+  Updater.cs, UpdateBanner.cs   updates from the GitHub releases
   Config.cs                 settings (%APPDATA%\ListaMateriais\settings.json) and templates
 tests/ListaMateriais.Tests/ parsers and the KMZ writer; Samples/ has made-up TCE PDFs
 ```
