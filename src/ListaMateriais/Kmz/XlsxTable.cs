@@ -24,7 +24,7 @@ internal sealed record SheetTable(string Name, IReadOnlyList<string?[]> Rows, IR
 /// <summary>Reads every sheet of an .xlsx as text, to let the user point at the columns that hold the points.</summary>
 internal static class XlsxTable
 {
-    private const int MaxRows = 200_000;
+    internal const int MaxRows = 200_000;
     private const int MaxColumns = 256;
 
     public static IReadOnlyList<SheetTable> Read(string path)

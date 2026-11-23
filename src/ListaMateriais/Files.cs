@@ -7,6 +7,15 @@ internal static class Files
     /// Reads the whole file while other programs keep it open (as Explorer does when copying).
     /// A document open in Word yields its last saved version.
     /// </summary>
+    /// <summary>A title made usable as a file name: no characters Windows refuses, not too long.</summary>
+    public static string SafeName(string title)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var name = new string([.. title.Select(c => invalid.Contains(c) ? ' ' : c)]).Trim().TrimEnd('.');
+        name = string.Join(' ', name.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return name.Length == 0 ? "apresentacao" : name.Length > 80 ? name[..80].TrimEnd() : name;
+    }
+
     public static byte[] ReadAllBytesShared(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,

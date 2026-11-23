@@ -45,12 +45,15 @@ internal sealed class AboutPage : Page
             .Add(automatic, top: 4, bottom: 20)
             .Caption("Criado por")
             .Add(author, bottom: 20)
+            .Caption("Agradecimento")
+            .Add(Ui.Hint("\"Esse app não seria desenvolvido sem sua colaboração, Rafinha, obrigado por tudo.\" - Rafael Mesquita - 2026"), bottom: 20)
             .Caption("Atalhos do teclado")
             .Add(Ui.Hint("Ctrl+O — escolher o arquivo da página atual\n" +
-                         "Ctrl+1 a Ctrl+8 — trocar de página\n" +
+                         "Ctrl+1 a Ctrl+9 — trocar de página\n" +
                          "Enter — gerar\n" +
                          "Arrastar um arquivo para a janela — abrir na página certa (PDF e Word em Gerar, Excel em Mapa, " +
-                         "KMZ/KML em Simplificar ou, com Conferir aberta, em Conferir)"))
+                         "KMZ/KML em Simplificar ou, com Conferir aberta, em Conferir; com Apresentação aberta, a planilha vai para ela)"))
+            .Add(Ui.Hint("Não somos um setor de sistemas, e não sabemos ler uma planilha de Excel. Obrigado por nao fazerem nada por nos, e somente pegar os creditos. ~ Eduardo Viana, 2026"), top: 20)
             .Spring(), 460);
     }
 }

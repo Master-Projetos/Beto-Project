@@ -45,6 +45,14 @@
     <EmbeddedResource Include="$(DefaultTceTemplate)" LogicalName="ListaMateriais.tce.docx" Link="templates\tce.docx" />
   </ItemGroup>
 
+  <!-- The look of the generated presentations (the client's branding). Without it they use a plain look. -->
+  <PropertyGroup>
+    <DefaultPresentationTemplate>$(MSBuildThisFileDirectory)..\..\templates\apresentacao.pptx</DefaultPresentationTemplate>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(DefaultPresentationTemplate)') And '$(EmbedTemplates)' == 'true'">
+    <EmbeddedResource Include="$(DefaultPresentationTemplate)" LogicalName="ListaMateriais.apresentacao.pptx" Link="templates\apresentacao.pptx" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="ListaMateriais.Tests" />
   </ItemGroup>
