@@ -14,6 +14,7 @@ internal sealed class MainForm : Form
     private readonly KmzPage _kmz;
     private readonly SimplifyPage _simplify;
     private readonly CheckPage _check;
+    private readonly PresentationPage _presentation;
     private readonly UpdateBanner _updates = new();
 
     public MainForm()
@@ -37,6 +38,7 @@ internal sealed class MainForm : Form
         _kmz = new KmzPage();
         _simplify = new SimplifyPage();
         _check = new CheckPage();
+        _presentation = new PresentationPage();
 
         var pane = new TableLayoutPanel
         {
@@ -48,7 +50,7 @@ internal sealed class MainForm : Form
             using var line = new Pen(Color.FromArgb(0xE0, 0xE0, 0xE0));
             e.Graphics.DrawLine(line, pane.Width - 1, 0, pane.Width - 1, pane.Height);
         };
-        foreach (var page in new Page[] { _generate, _kmz, _simplify, _check, templates, headers, new SettingsPage(), new AboutPage(_updates) })
+        foreach (var page in new Page[] { _generate, _kmz, _simplify, _check, _presentation, templates, headers, new SettingsPage(), new AboutPage(_updates) })
         {
             var button = new NavButton(page.Glyph, page.Title);
             button.CheckedChanged += (_, _) =>
@@ -87,6 +89,7 @@ internal sealed class MainForm : Form
             : page == _kmz ? _kmz.MainButton
             : page == _simplify ? _simplify.MainButton
             : page == _check ? _check.MainButton
+            : page == _presentation ? _presentation.MainButton
             : null;
     }
 
@@ -123,7 +126,7 @@ internal sealed class MainForm : Form
     {
         if (keyData == (Keys.Control | Keys.O))
         {
-            if (Current != _generate && Current != _kmz && Current != _simplify && Current != _check)
+            if (Current != _generate && Current != _kmz && Current != _simplify && Current != _check && Current != _presentation)
                 GoTo(_generate);
             Current.Browse();
             return true;

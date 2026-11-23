@@ -144,6 +144,43 @@ the coordinates of an issue, "Copiar lista" copies them all for Excel, and "Salv
 marcados" writes one marker per issue, to open in Google Earth over the original map. Port counts,
 cable types and declared lengths are not checked: the maps do not carry them in a form that can be read.
 
+## Presentations (PowerPoint)
+
+The "Apresentação" page turns a spreadsheet (`.xlsx` or `.csv`) into a `.pptx` with no other input:
+
+- **Reading:**
+  - the header row is found even below a title;
+  - sheets with the same columns (one per city, one per seller) are joined, the sheet becoming a column;
+  - total rows are left out;
+  - values are read as people write them (`R$ 1.234,56`, `12%`, Excel date numbers, `31/12/2026`, `mar/26`).
+- **Columns:** the app works out the role of each column.
+  - **Main number:** chosen from the money, amount or count columns.
+  - **Part:** a part of that number gives a rate, e.g. "Portas ocupadas" of "Quantidade portas" gives the occupancy.
+  - **Groupings:** city, seller, product, type, plus the date and the status.
+  - **Never summed or grouped:** codes, documents, phones, coordinates and contract numbers.
+  - The page says in one sentence how the table was read.
+- **Slides** (from 4 to 8), each closing on a one-line conclusion:
+  - **Cover** and **Visão geral**: big numbers and highlights.
+  - **Evolução mensal**: the last full month against the one before. A month still running is marked and left out of the comparisons.
+  - **Ranking**: for the two best groupings, with the leader's share, how many times the average it is, and the share of the top 3. When there is a status column, the pending part shows in orange.
+  - **Taxa** (occupancy): extremes taken only among groups that are not tiny. Groups above 85% are flagged as close to full.
+  - **Situação**: done, in progress, and problems.
+  - **Principais conclusões**.
+- **Description (optional):** a sentence such as "Vendas de Lavras no 1º trimestre de 2026" or "último trimestre".
+  - It filters by period ("último…" counts back from the latest date in the data) and by values found in the sheet (a city, a seller).
+  - It also becomes the title.
+  - When it filters everything out, the app says so instead of making an empty deck.
+- **Drawing:**
+  - The charts are drawn with shapes, in the look of the example deck, so they can be retouched by hand.
+  - Text is measured and shrunk or cut to fit its box.
+  - Only what the data shows is stated; causes are never made up.
+- **Look:**
+  - The client's look comes from `templates/apresentacao.pptx`: its master, theme, layout and pictures are kept, and its slides, thumbnail and properties are dropped.
+  - Like the other templates, it is built in, or kept from an earlier copy, or read from an `apresentacao.pptx` next to the executable.
+  - Without it, a plain look is used.
+  - `*.pptx` files are not versioned, because the example carries client branding and numbers.
+- **Privacy:** nothing leaves the computer.
+
 ## Updates
 
 On start, the published executable asks GitHub for the latest release of this repository and, when
@@ -165,7 +202,7 @@ them use those copies. A machine that never had a copy with templates asks for t
 ```
 src/ListaMateriais/
   Program.cs, MainForm.cs   entry point; window with the navigation pane, file drop and shortcuts
-  Pages/                    one file per page (Gerar, Mapa, Simplificar, Conferir, Modelos, Cabeçalhos, Configurações, Sobre)
+  Pages/                    one file per page (Gerar, Mapa, Simplificar, Conferir, Apresentação, Modelos, Cabeçalhos, Configurações, Sobre)
   Ui.cs, Dialogs.cs         shared look, layout helpers and the task dialogs
   *Form.cs                  dialogs of the generation flow (table selection, report data, placeholders)
   DocxReader.cs             material tables of a Word document

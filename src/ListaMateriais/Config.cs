@@ -216,14 +216,18 @@ internal static partial class Config
         {
             if (!File.Exists(BuiltInTemplateFile))
                 UnpackBuiltInTemplate();
-            foreach (var kind in new[] { ReportKind.Tcr, ReportKind.Tce })
+            foreach (var (resourceName, kept) in new[]
+                     {
+                         (WordTemplate(ReportKind.Tcr).Resource, KeptWordTemplate(ReportKind.Tcr)),
+                         (WordTemplate(ReportKind.Tce).Resource, KeptWordTemplate(ReportKind.Tce)),
+                         (PresentationResource, KeptPresentationTemplate),
+                     })
             {
-                using var resource = typeof(Config).Assembly.GetManifestResourceStream(WordTemplate(kind).Resource);
+                using var resource = typeof(Config).Assembly.GetManifestResourceStream(resourceName);
                 if (resource is null)
                     continue;
                 using var buffer = new MemoryStream();
                 resource.CopyTo(buffer);
-                var kept = KeptWordTemplate(kind);
                 if (File.Exists(kept) && buffer.ToArray().AsSpan().SequenceEqual(File.ReadAllBytes(kept)))
                     continue;
                 Directory.CreateDirectory(SettingsFolder);
@@ -234,6 +238,38 @@ internal static partial class Config
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             Trace.TraceWarning("Não foi possível guardar os modelos padrão: {0}", e.Message);
+        }
+    }
+
+    private const string PresentationResource = "ListaMateriais.apresentacao.pptx";
+
+    /// <summary>Where the presentation template built into the executable is kept for the versions without it.</summary>
+    private static string KeptPresentationTemplate => Path.Combine(SettingsFolder, "modelo-apresentacao.pptx");
+
+    /// <summary>
+    /// The look of the presentations: "apresentacao.pptx" next to the executable, else the one built in (or kept from
+    /// an earlier copy). Null when there is none: the presentations then use a plain look.
+    /// </summary>
+    public static byte[]? LoadPresentationTemplate()
+    {
+        try
+        {
+            var beside = Path.Combine(AppContext.BaseDirectory, "apresentacao.pptx");
+            if (File.Exists(beside))
+                return Files.ReadAllBytesShared(beside);
+            using var resource = typeof(Config).Assembly.GetManifestResourceStream(PresentationResource);
+            if (resource is not null)
+            {
+                using var buffer = new MemoryStream();
+                resource.CopyTo(buffer);
+                return buffer.ToArray();
+            }
+            return File.Exists(KeptPresentationTemplate) ? File.ReadAllBytes(KeptPresentationTemplate) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning("Não foi possível ler o modelo de apresentação: {0}", e.Message);
+            return null;
         }
     }
 

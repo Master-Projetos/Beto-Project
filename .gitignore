@@ -25,3 +25,7 @@ materials.json
 .idea/
 Thumbs.db
 Desktop.ini
+
+# Presentations (client branding and data)
+*.pptx
+*.ppt
