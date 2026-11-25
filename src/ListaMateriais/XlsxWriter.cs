@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
 using System.Text.RegularExpressions;
@@ -15,8 +14,6 @@ namespace ListaMateriais;
 internal static partial class XlsxWriter
 {
     private const long MaxTemplateBytes = 200L * 1024 * 1024;
-    private const int SharingViolation = unchecked((int)0x80070020);
-    private const int LockViolation = unchecked((int)0x80070021);
 
     private static readonly XName Row = Main + "row";
     private static readonly XName Cell = Main + "c";
@@ -333,58 +330,18 @@ internal static partial class XlsxWriter
             ["xl/_rels/workbook.xml.rels"] = Serialize(rels),
         };
 
-        // Write to a temp file and swap at the end so a half-written spreadsheet is never left behind.
-        var fullOutput = Path.GetFullPath(output);
-        var folder = Path.GetDirectoryName(fullOutput)!;
-        var temp = Path.Combine(folder, $".~{Guid.NewGuid():N}.tmp");
-        var name = Path.GetFileName(fullOutput);
-        try
+        Files.SaveSafely(output, stream =>
         {
-            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            using (var outZip = new ZipArchive(stream, ZipArchiveMode.Create))
+            using var outZip = new ZipArchive(stream, ZipArchiveMode.Create);
+            foreach (var entry in template.Entries)
             {
-                foreach (var entry in template.Entries)
-                {
-                    if (entry.FullName == "xl/calcChain.xml")
-                        continue;
-                    var bytes = replaced.TryGetValue(entry.FullName, out var data) ? data : ReadBytes(entry);
-                    using var target = outZip.CreateEntry(entry.FullName, CompressionLevel.Optimal).Open();
-                    target.Write(bytes);
-                }
+                if (entry.FullName == "xl/calcChain.xml")
+                    continue;
+                var bytes = replaced.TryGetValue(entry.FullName, out var data) ? data : ReadBytes(entry);
+                using var target = outZip.CreateEntry(entry.FullName, CompressionLevel.Optimal).Open();
+                target.Write(bytes);
             }
-            File.Move(temp, fullOutput, overwrite: true);
-        }
-        catch (Exception e) when (File.Exists(fullOutput)
-                                  && (e is UnauthorizedAccessException || e.HResult is SharingViolation or LockViolation))
-        {
-            throw new AppException($"Não foi possível substituir \"{name}\".\n\n" +
-                                   "Se essa planilha estiver aberta no Excel, feche-a e tente de novo. " +
-                                   "Ou salve com outro nome.", e);
-        }
-        catch (Exception e) when (e is UnauthorizedAccessException or DirectoryNotFoundException)
-        {
-            throw new AppException($"Não foi possível salvar na pasta:\n{folder}\n\n" +
-                                   "A pasta não existe ou você não tem permissão para gravar nela. " +
-                                   "Escolha outra pasta.", e);
-        }
-        catch (IOException e)
-        {
-            throw new AppException($"Não foi possível salvar \"{name}\".\n\n" +
-                                   "Verifique se há espaço em disco e se a pasta está acessível.\n\n" +
-                                   $"Detalhe: {e.Message}", e);
-        }
-        finally
-        {
-            try
-            {
-                if (File.Exists(temp))
-                    File.Delete(temp);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                Trace.TraceWarning("Não foi possível apagar o arquivo temporário {0}: {1}", temp, e.Message);
-            }
-        }
+        });
     }
 
     private static void ForceRecalculation(XElement workbook)

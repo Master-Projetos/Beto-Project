@@ -41,6 +41,14 @@ internal abstract class Page : Panel
         Controls.Add(content);
     }
 
+    /// <summary>Changes the height given to <see cref="SetContent"/>, when the content grows or shrinks.</summary>
+    protected void SetMinHeight(int minHeight)
+    {
+        _minHeight = minHeight;
+        if (Created)
+            AutoScrollMinSize = new Size(0, LogicalToDeviceUnits(_minHeight));
+    }
+
     protected override void OnCreateControl()
     {
         base.OnCreateControl();

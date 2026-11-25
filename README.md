@@ -181,6 +181,25 @@ The "Apresentação" page turns a spreadsheet (`.xlsx` or `.csv`) into a `.pptx`
   - `*.pptx` files are not versioned, because the example carries client branding and numbers.
 - **Privacy:** nothing leaves the computer.
 
+## Spreadsheets (paint and filter)
+
+The "Planilha" page paints cells and filters rows of an `.xlsx`, on every sheet or only on the ones
+checked, and saves the result as a new file (the original is never changed).
+
+- **Painting:** one or more rules, each with its columns (or the whole row), a fill color (or
+  removing the fill) and optional conditions. The header can be painted too. When two rules hit the
+  same cell, the later one wins.
+- **Filtering:** conditions joined by E / OU (the same operators as the map page; numbers and
+  `dd/mm/yyyy` dates compare as such). Rows that do not meet them are hidden, never deleted, and
+  Excel's filter buttons are added to the header when the sheet has no filter or table yet. The
+  buttons do not hold the conditions: using them in Excel (or clearing the filter) shows the hidden
+  rows again.
+- **Columns** are matched by header name (ignoring case and accents), so they may sit in different
+  places on each sheet. The header row is found on its own or set by hand.
+- **Warnings instead of failures:** a missing column, an empty or unreadable sheet, or a filter that
+  matches nothing is listed as a warning and the rest is still done. A condition on a column a sheet
+  does not have is not applied there. When nothing would change, no file is written.
+
 ## Updates
 
 On start, the published executable asks GitHub for the latest release of this repository and, when
@@ -202,7 +221,8 @@ them use those copies. A machine that never had a copy with templates asks for t
 ```
 src/ListaMateriais/
   Program.cs, MainForm.cs   entry point; window with the navigation pane, file drop and shortcuts
-  Pages/                    one file per page (Gerar, Mapa, Simplificar, Conferir, Apresentação, Modelos, Cabeçalhos, Configurações, Sobre)
+  Pages/                    one file per page (Gerar, Mapa, Simplificar, Conferir, Apresentação, Planilha, Modelos, Cabeçalhos, Configurações, Sobre)
+  Planilhas/                paint cells and filter rows of an .xlsx
   Ui.cs, Dialogs.cs         shared look, layout helpers and the task dialogs
   *Form.cs                  dialogs of the generation flow (table selection, report data, placeholders)
   DocxReader.cs             material tables of a Word document
