@@ -358,13 +358,21 @@ internal static class SheetFilters
             return null;
         if (Number(actual) is { } left && Number(value) is { } right)
             return left.CompareTo(right);
+        if (Date(actual) is { } earlier && Date(value) is { } later)
+            return earlier.CompareTo(later);
         return string.CompareOrdinal(actual, value);
     }
 
     private static double? Number(string text) =>
         double.TryParse(text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var number) ? number : null;
 
-    private static string Normalize(string? value)
+    private static DateTime? Date(string text) =>
+        DateTime.TryParseExact(text, ["d/M/yyyy", "d/M/yy"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+            ? date
+            : null;
+
+    /// <summary>Upper case, without accents or surrounding spaces: how cells and values are compared.</summary>
+    internal static string Normalize(string? value)
     {
         if (string.IsNullOrEmpty(value))
             return string.Empty;
