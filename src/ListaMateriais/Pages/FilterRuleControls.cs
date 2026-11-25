@@ -16,6 +16,21 @@ internal sealed class FilterRuleControls : IDisposable
         AutoCompleteSource = AutoCompleteSource.ListItems, MaxDropDownItems = 20,
     };
 
+    private const string ListOperator = "É um destes";
+
+    /// <summary>Opens the list where several values are checked at once.</summary>
+    private readonly Button _pick = Ui.Secondary(new Button
+    {
+        Text = "Marcar vários...", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 3, 0, 3),
+    });
+
+    /// <summary>The value box and the button beside it: what goes in the value column of the grid.</summary>
+    public TableLayoutPanel ValueCell { get; } = new()
+    {
+        ColumnCount = 2, RowCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill,
+        Margin = new Padding(0, 0, 8, 0),
+    };
+
     private readonly Func<int, IReadOnlyList<string>> _valuesOf;
     private string _typed = string.Empty;
     public Button Remove { get; } = Ui.Secondary(new Button
@@ -31,7 +46,14 @@ internal sealed class FilterRuleControls : IDisposable
         Join.Width = 58;
         Join.Margin = new Padding(0, 3, 8, 3);
         Column.Dock = Value.Dock = DockStyle.Fill;
-        Column.Margin = Value.Margin = new Padding(0, 3, 8, 3);
+        Column.Margin = new Padding(0, 3, 8, 3);
+        Value.Margin = new Padding(0, 3, 4, 3);
+        ValueCell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        ValueCell.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        ValueCell.Controls.Add(Value, 0, 0);
+        ValueCell.Controls.Add(_pick, 1, 0);
+        _pick.Click += (_, _) => PickSeveral();
+        tips.SetToolTip(_pick, "Marque vários valores de uma vez, para pegar várias linhas.");
         Operator.Width = 140;
         Operator.Margin = new Padding(0, 3, 8, 3);
         foreach (var column in columns)
@@ -52,7 +74,7 @@ internal sealed class FilterRuleControls : IDisposable
         ShowValue();
     }
 
-    private bool IsList => Operator.SelectedItem?.ToString() == "É um destes";
+    private bool IsList => Operator.SelectedItem?.ToString() == ListOperator;
 
     /// <summary>Offers the values found in the chosen column, keeping what is typed.</summary>
     private void FillValues()
@@ -95,6 +117,37 @@ internal sealed class FilterRuleControls : IDisposable
     {
         var op = Operator.SelectedItem?.ToString() ?? "";
         Value.Enabled = SheetFilters.NeedsValue(op);
+        // Several values only make sense when the cell has to be one of them.
+        _pick.Enabled = op is "É igual a" or ListOperator;
+    }
+
+    private void PickSeveral()
+    {
+        var column = Column.SelectedItem?.ToString() ?? "";
+        IReadOnlyList<string> current = IsList
+            ? Value.Text.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            : string.IsNullOrWhiteSpace(Value.Text) ? [] : [Value.Text.Trim()];
+        using var dialog = new ValuePickerForm(column, _valuesOf(Column.SelectedIndex), current);
+        if (dialog.ShowDialog(_pick.FindForm()) != DialogResult.OK)
+            return;
+        if (Combine(dialog.Picked) is not { } combined)
+        {
+            Dialogs.Info(_pick, "Não dá para juntar esses valores",
+                "Um dos valores marcados tem \";\", que é o separador da lista. Marque-o sozinho, em uma condição própria com OU.");
+            return;
+        }
+        Operator.SelectedItem = combined.Operator;
+        Value.Text = _typed = combined.Value;
+    }
+
+    /// <summary>
+    /// The operator and value that stand for the picked values; null when they cannot be written as a list.
+    /// </summary>
+    internal static (string Operator, string Value)? Combine(IReadOnlyList<string> picked)
+    {
+        if (picked.Count <= 1)
+            return ("É igual a", picked.Count == 0 ? string.Empty : picked[0]);
+        return picked.Any(v => v.Contains(';', StringComparison.Ordinal)) ? null : (ListOperator, string.Join("; ", picked));
     }
 
     public SheetFilterRule ToRule() =>
@@ -102,7 +155,7 @@ internal sealed class FilterRuleControls : IDisposable
 
     public void Dispose()
     {
-        foreach (Control control in new Control[] { Active, Lead, Join, Column, Operator, Value, Remove })
+        foreach (Control control in new Control[] { Active, Lead, Join, Column, Operator, Value, _pick, ValueCell, Remove })
             control.Dispose();
     }
 

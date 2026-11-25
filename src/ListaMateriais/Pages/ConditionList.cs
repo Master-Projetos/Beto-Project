@@ -177,7 +177,7 @@ internal sealed class ConditionList : TableLayoutPanel
             _grid.Controls.Add(i == 0 ? rule.Lead : rule.Join, 1, i + 1);
             _grid.Controls.Add(rule.Column, 2, i + 1);
             _grid.Controls.Add(rule.Operator, 3, i + 1);
-            _grid.Controls.Add(rule.Value, 4, i + 1);
+            _grid.Controls.Add(rule.ValueCell, 4, i + 1);
             _grid.Controls.Add(rule.Remove, 5, i + 1);
         }
         for (var row = 0; row < _grid.RowCount; row++)

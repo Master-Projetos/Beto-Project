@@ -215,6 +215,9 @@ checked, and saves the result as a new file (the original is never changed).
   Excel's filter buttons are added to the header when the sheet has no filter or table yet. The
   buttons do not hold the conditions: using them in Excel (or clearing the filter) shows the hidden
   rows again.
+- **Several values at once:** "Marcar vários..." beside a condition's value lists the values of the
+  column, with a search box; checking more than one turns the condition into "É um destes". Several
+  painting rules can be selected and removed together.
 - **Columns** are matched by header name (ignoring case and accents), so they may sit in different
   places on each sheet. The header row is found on its own or set by hand.
 - **Warnings instead of failures:** a missing column, an empty or unreadable sheet, or a filter that
