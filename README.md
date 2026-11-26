@@ -2,7 +2,8 @@
 
 Reads the material tables embedded in a Word document and fills the
 `templates/lista_materiais.xlsx` template. Excel is not required. It also fills the TCR/TCE Word
-documents from the Route Map report and creates KMZ maps from lists of coordinates.
+documents from the Route Map report, creates KMZ maps from lists of coordinates and turns AutoCAD
+drawings (DWG) into KMZ.
 
 Before generating, the app lists every material table in the document (name in the first
 column, quantity in the third) with a preview of its items, and the user checks the ones to
@@ -144,6 +145,26 @@ the coordinates of an issue, "Copiar lista" copies them all for Excel, and "Salv
 marcados" writes one marker per issue, to open in Google Earth over the original map. Port counts,
 cable types and declared lengths are not checked: the maps do not carry them in a form that can be read.
 
+## DWG drawings to KMZ
+
+The "DWG para KMZ" page places an AutoCAD drawing on the map for Google Earth. Pick or drag a `.dwg` (or a
+text `.dxf`). The file is read by the app itself, with no AutoCAD, no converter and no internet.
+
+- **Versions:** DWG from AutoCAD 2000 to 2018 and later (R2000, R2004, R2010, R2013, R2018 formats). AutoCAD 2007 to
+  2009 files (R2007) are not read yet: the app says so and asks to save the drawing as 2013 (or 2000) or as DXF.
+- **What is drawn:** lines, polylines (with arcs), arcs, circles, ellipses, splines, points, texts and block
+  references, from the model space. Every layer becomes a folder of the KMZ and keeps its colors. Hatches,
+  dimensions, 3D solids and images are left out, and the page says how many.
+- **Where it goes on the map:** the drawing has no position of its own, so the page asks for its coordinate system:
+  UTM (zone and hemisphere, remembered; zone 23 South by default) or "already in degrees". The unit (meters,
+  centimeters, millimeters) can be changed. SIRGAS 2000 and WGS 84 are treated as the same. Before generating, the
+  page shows where the drawing lands (latitude/longitude of its center and its size in km), in red when it cannot be
+  right, so a wrong zone is seen right away.
+- **Layers:** listed with the number of elements; layers that are off or frozen in the drawing start unchecked.
+- **Blocks:** each block reference becomes a point named after the block; "Desenhar também o conteúdo dos blocos"
+  draws the block's own lines too.
+- A damaged file never crashes the app: the objects that cannot be read are skipped and counted.
+
 ## Presentations (PowerPoint)
 
 The "Apresentação" page turns a spreadsheet (`.xlsx` or `.csv`) into a `.pptx` with no other input:
@@ -221,7 +242,7 @@ them use those copies. A machine that never had a copy with templates asks for t
 ```
 src/ListaMateriais/
   Program.cs, MainForm.cs   entry point; window with the navigation pane, file drop and shortcuts
-  Pages/                    one file per page (Gerar, Mapa, Simplificar, Conferir, Apresentação, Planilha, Modelos, Cabeçalhos, Configurações, Sobre)
+  Pages/                    one file per page (Gerar, Mapa, DWG, Simplificar, Conferir, Apresentação, Planilha, Modelos, Cabeçalhos, Configurações, Sobre)
   Planilhas/                paint cells and filter rows of an .xlsx
   Ui.cs, Dialogs.cs         shared look, layout helpers and the task dialogs
   *Form.cs                  dialogs of the generation flow (table selection, report data, placeholders)
@@ -233,9 +254,13 @@ src/ListaMateriais/
                             (AddressText) and their lookup (Geocoder), marker drawing and the KMZ writer;
                             KmlReader, MapSimplifier and SimpleKmzWriter for the simplified map;
                             MapChecker and IssueKmzWriter for the map check
+  Cad/                      DWG reader (DwgFile: pages and compression; DwgReader: objects; BitReader), DXF reader,
+                            curves to lines (CadGeometry), UTM to latitude/longitude, and the KMZ writer for drawings
   Updater.cs, UpdateBanner.cs   updates from the GitHub releases
   Config.cs                 settings (%APPDATA%\ListaMateriais\settings.json) and templates
-tests/ListaMateriais.Tests/ parsers and the KMZ writer; Samples/ has made-up TCE PDFs
+tests/ListaMateriais.Tests/ parsers and the KMZ writer; Samples/ has made-up TCE PDFs. The DWG tests read real
+                            files of every version when DWG_SAMPLES points to a folder with example_2000.dwg ... example_2018.dwg
+                            (the LibreDWG test files; not kept here), and pass without checking anything otherwise
 ```
 
 ## Requirements

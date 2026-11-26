@@ -12,6 +12,7 @@ internal sealed class MainForm : Form
     private readonly Panel _content = new() { Dock = DockStyle.Fill, BackColor = Color.White };
     private readonly GeneratePage _generate;
     private readonly KmzPage _kmz;
+    private readonly DwgPage _dwg;
     private readonly SimplifyPage _simplify;
     private readonly CheckPage _check;
     private readonly PresentationPage _presentation;
@@ -37,6 +38,7 @@ internal sealed class MainForm : Form
         var headers = new HeadersPage();
         _generate = new GeneratePage(templates, headers);
         _kmz = new KmzPage();
+        _dwg = new DwgPage();
         _simplify = new SimplifyPage();
         _check = new CheckPage();
         _presentation = new PresentationPage();
@@ -52,7 +54,7 @@ internal sealed class MainForm : Form
             using var line = new Pen(Color.FromArgb(0xE0, 0xE0, 0xE0));
             e.Graphics.DrawLine(line, pane.Width - 1, 0, pane.Width - 1, pane.Height);
         };
-        foreach (var page in new Page[] { _generate, _kmz, _simplify, _check, _presentation, _spreadsheet, templates, headers, new SettingsPage(), new AboutPage(_updates) })
+        foreach (var page in new Page[] { _generate, _kmz, _dwg, _simplify, _check, _presentation, _spreadsheet, templates, headers, new SettingsPage(), new AboutPage(_updates) })
         {
             var button = new NavButton(page.Glyph, page.Title);
             button.CheckedChanged += (_, _) =>
@@ -89,6 +91,7 @@ internal sealed class MainForm : Form
         // Enter generates on the pages that have something to generate.
         AcceptButton = page == _generate ? _generate.MainButton
             : page == _kmz ? _kmz.MainButton
+            : page == _dwg ? _dwg.MainButton
             : page == _simplify ? _simplify.MainButton
             : page == _check ? _check.MainButton
             : page == _presentation ? _presentation.MainButton
@@ -129,7 +132,7 @@ internal sealed class MainForm : Form
     {
         if (keyData == (Keys.Control | Keys.O))
         {
-            if (Current != _generate && Current != _kmz && Current != _simplify && Current != _check && Current != _presentation
+            if (Current != _generate && Current != _kmz && Current != _dwg && Current != _simplify && Current != _check && Current != _presentation
                 && Current != _spreadsheet)
                 GoTo(_generate);
             Current.Browse();

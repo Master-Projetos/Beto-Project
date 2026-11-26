@@ -417,6 +417,20 @@ internal static partial class Config
         Write("simplifyWidth", width);
     }
 
+    /// <summary>How the last DWG was placed on the map: in degrees or UTM, zone, south, unit (0 m, 1 cm, 2 mm), and whether blocks are drawn.</summary>
+    public static (bool Degrees, int Zone, bool South, int Unit, bool DrawBlocks) LoadDwgOptions() =>
+        (Read("dwgDegrees", false), Math.Clamp(Read("dwgZone", 23), 1, 60), Read("dwgSouth", true),
+            Math.Clamp(Read("dwgUnit", 0), 0, 2), Read("dwgDrawBlocks", false));
+
+    public static void SaveDwgOptions(bool degrees, int zone, bool south, int unit, bool drawBlocks)
+    {
+        Write("dwgDegrees", degrees);
+        Write("dwgZone", zone);
+        Write("dwgSouth", south);
+        Write("dwgUnit", unit);
+        Write("dwgDrawBlocks", drawBlocks);
+    }
+
     /// <summary>How the last map check was made: join distance and longest span, in meters, and whether spans are checked.</summary>
     public static (int JoinDistance, bool CheckSpans, int MaxSpan) LoadCheckOptions() =>
         (Math.Clamp(Read("checkJoinDistance", 10), 1, 100), Read("checkSpans", false), Math.Clamp(Read("checkMaxSpan", 80), 10, 1000));
