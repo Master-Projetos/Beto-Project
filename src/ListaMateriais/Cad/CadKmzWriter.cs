@@ -52,6 +52,22 @@ internal static class CadKmzWriter
 
     private static string Number(double value) => value.ToString("0.#######", CultureInfo.InvariantCulture);
 
+    /// <summary>Google Earth shows these as a table in the balloon of the marker.</summary>
+    private static void WriteData(XmlWriter xml, IReadOnlyList<(string Tag, string Value)> data)
+    {
+        if (data.Count == 0)
+            return;
+        xml.WriteStartElement("ExtendedData");
+        foreach (var (tag, value) in data)
+        {
+            xml.WriteStartElement("Data");
+            xml.WriteAttributeString("name", KmzWriter.Clean(tag));
+            xml.WriteElementString("value", KmzWriter.Clean(value));
+            xml.WriteEndElement();
+        }
+        xml.WriteEndElement();
+    }
+
     internal static void WriteKml(Stream output, string title, CadMap map, string? iconHref)
     {
         using var xml = XmlWriter.Create(output, new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = false, CloseOutput = false });
@@ -124,6 +140,7 @@ internal static class CadKmzWriter
                 else
                 {
                     xml.WriteElementString("styleUrl", (feature.Kind == GeoKind.Label ? "#t" : "#p") + id);
+                    WriteData(xml, feature.Data);
                     xml.WriteStartElement("Point");
                     xml.WriteElementString("coordinates", $"{Number(feature.Points[0].Longitude)},{Number(feature.Points[0].Latitude)},0");
                     xml.WriteEndElement();

@@ -162,7 +162,11 @@ text `.dxf`). The file is read by the app itself, with no AutoCAD, no converter 
   right, so a wrong zone is seen right away.
 - **Layers:** listed with the number of elements; layers that are off or frozen in the drawing start unchecked.
 - **Blocks:** each block reference becomes a point named after the block; "Desenhar também o conteúdo dos blocos"
-  draws the block's own lines too.
+  draws the block's own lines too. The values filled in a reference (the number of a box, its capacity, its node)
+  are part of the name and are all listed when the point is clicked. A block whose drawing lands far from its
+  insertion point is marked where the drawing shows.
+- **Datum:** SIRGAS 2000 / WGS 84 or SAD 69 (moved with the IBGE shift). SAD 69 is preselected when a text of the
+  drawing names it or its origin ("Chuá").
 - A damaged file never crashes the app: the objects that cannot be read are skipped and counted.
 
 ## Presentations (PowerPoint)
@@ -229,7 +233,7 @@ checked, and saves the result as a new file (the original is never changed).
 On start, the published executable asks GitHub for the latest release of this repository and, when
 it is newer, offers it in a strip at the top of the window. "Atualizar agora" downloads it next to
 the executable, checks its SHA-256, renames the running file to `.old`, puts the new one in its
-place and restarts (the `.old` file is deleted on the next start). The "Sobre" page checks on demand
+place and restarts (the new copy deletes the `.old` file once the old one has closed). The "Sobre" page checks on demand
 and turns the automatic check off. Copies run with `dotnet run` or from Visual Studio never replace
 themselves.
 

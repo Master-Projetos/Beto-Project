@@ -21,6 +21,81 @@ public class UtmTests
     }
 }
 
+public class Sad69Tests
+{
+    // Reference values computed with PROJ: SAD69 / UTM 23S to SIRGAS 2000 with the IBGE shift.
+    [Theory]
+    [InlineData(453000, 7520000, -22.425941485623834, -45.45714393993941)]
+    [InlineData(333000, 7394000, -23.556190544350322, -46.636632179931425)]
+    [InlineData(700000, 8000000, -18.079862863355057, -43.11060487492925)]
+    public void MatchesProj(double e, double n, double lat, double lon)
+    {
+        var (la, lo) = Utm.ToLatLon(23, true, e, n, sad69: true);
+        Assert.InRange(la, lat - 1e-6, lat + 1e-6);   // about ten centimeters
+        Assert.InRange(lo, lon - 1e-6, lon + 1e-6);
+    }
+
+    [Theory]
+    [InlineData("Datum Horizontal: Chuá (M.G.)", true)]
+    [InlineData("PROJEÇÃO UTM - SAD-69", true)]
+    [InlineData("Datum: SIRGAS 2000", false)]
+    [InlineData("Rua do Chuá", false)]
+    public void IsRecognizedFromTheTextsOfTheDrawing(string text, bool expected)
+    {
+        var drawing = new CadDrawing();
+        drawing.Blocks["MOLDURA"] = [new CadEntity { Kind = CadKind.Text, Text = text }];
+        Assert.Equal(expected, drawing.MentionsSad69());
+    }
+}
+
+public class BlockDataTests
+{
+    private static readonly CadGeoSettings Utm23S = new(false, 23, true, 1.0, false);
+
+    [Fact]
+    public void AttributesOfADxfBlockReferenceGoToItsMarker()
+    {
+        var text = string.Join('\n', "0", "SECTION", "2", "ENTITIES",
+            "0", "INSERT", "8", "CAIXAS", "2", "CTO", "66", "1", "10", "333000", "20", "7394000",
+            "0", "ATTRIB", "2", "NUMERO", "1", "30",
+            "0", "ATTRIB", "2", "PAR", "1", "",
+            "0", "ATTRIB", "2", "CAP", "1", "10",
+            "0", "SEQEND", "0", "ENDSEC", "0", "EOF");
+
+        var drawing = DxfReader.Read(Encoding.UTF8.GetBytes(text));
+        var map = CadMapBuilder.Build(drawing, Utm23S, new HashSet<string> { "CAIXAS" });
+
+        Assert.Equal([("NUMERO", "30"), ("CAP", "10")], drawing.Model.Single().Attributes);
+        var marker = map.Features.Single();
+        Assert.Equal("CTO · NUMERO 30", marker.Name);
+        Assert.Equal([("BLOCO", "CTO"), ("NUMERO", "30"), ("CAP", "10")], marker.Data);
+        using var kml = new MemoryStream();
+        CadKmzWriter.WriteKml(kml, "t", map, null);
+        Assert.Contains("<Data name=\"CAP\"><value>10</value></Data>", Encoding.UTF8.GetString(kml.ToArray()), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ABlockDrawnAwayFromItsInsertionPointIsMarkedWhereItShows()
+    {
+        // The block was made from a drawing at its own coordinates, and is inserted so that it lands at 333100, 7394000.
+        var drawing = new CadDrawing();
+        var line = new CadEntity { Kind = CadKind.Path };
+        line.Points.Add(new CadPoint(500000, 7700000));
+        line.Points.Add(new CadPoint(500010, 7700000));
+        drawing.Blocks["CEO"] = [line];
+        var insert = new CadEntity { Kind = CadKind.Insert, Layer = "REDE", Block = "CEO" };
+        insert.Points.Add(new CadPoint(333100 - 500005, 7394000 - 7700000));
+        drawing.Model.Add(insert);
+
+        var map = CadMapBuilder.Build(drawing, Utm23S, new HashSet<string> { "REDE" });
+
+        var expected = Utm.ToLatLon(23, true, 333100, 7394000);
+        var (longitude, latitude) = map.Features.Single().Points[0];
+        Assert.Equal(expected.Latitude, latitude, 7);
+        Assert.Equal(expected.Longitude, longitude, 7);
+    }
+}
+
 public class DxfReaderTests
 {
     private static byte[] Dxf(params (int Code, string Value)[] groups)

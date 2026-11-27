@@ -185,6 +185,22 @@ internal static class DxfReader
                     entity = Polyline(data, vertices);
                     break;
                 }
+                case "INSERT":
+                {
+                    entity = Convert(type, data);
+                    // The values filled in this reference follow it, closed by SEQEND.
+                    while (i + 1 < records.Count && records[i + 1].Type == "ATTRIB")
+                    {
+                        var attribute = records[++i].Data;
+                        var tag = attribute.FirstOrDefault(g => g.Code == 2)?.Value ?? string.Empty;
+                        var value = attribute.FirstOrDefault(g => g.Code == 1)?.Value ?? string.Empty;
+                        if (value.Length > 0)
+                            entity?.Attributes.Add((tag, value));
+                    }
+                    if (i + 1 < records.Count && records[i + 1].Type == "SEQEND")
+                        i++;
+                    break;
+                }
                 default:
                     try
                     {
@@ -215,7 +231,7 @@ internal static class DxfReader
 
     private static bool IsUnsupportedDrawing(string type) =>
         type is "HATCH" or "DIMENSION" or "SOLID" or "3DFACE" or "3DSOLID" or "IMAGE" or "LEADER" or "MLEADER" or "WIPEOUT" or "REGION"
-            or "TRACE" or "MLINE" or "XLINE" or "RAY" or "ATTRIB" or "ATTDEF";
+            or "TRACE" or "MLINE" or "XLINE" or "RAY" or "MULTILEADER";
 
     private static double Get(List<Group> data, int code, double fallback = 0) =>
         data.FirstOrDefault(g => g.Code == code) is { } g ? Number(g.Value) : fallback;

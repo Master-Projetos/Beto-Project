@@ -19,6 +19,7 @@ internal sealed class DwgPage : Page
     private readonly ComboBox _zone = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 210 };
     private readonly ComboBox _hemisphere = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
     private readonly ComboBox _unit = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
+    private readonly ComboBox _datum = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 210 };
     private readonly CheckBox _blocks = new() { Text = "Desenhar também o conteúdo dos blocos (símbolos), não só um ponto em cada", AutoSize = true };
     private readonly ListView _layers = new()
     {
@@ -37,6 +38,7 @@ internal sealed class DwgPage : Page
     private CadDrawing? _drawing;
     private bool _loading;
     private bool _busy;
+    private bool _saysSad69;
 
     public override string Title => "&DWG para KMZ";
     public override string Glyph => "";
@@ -65,6 +67,9 @@ internal sealed class DwgPage : Page
         _unit.Items.AddRange(["Metros", "Centímetros", "Milímetros"]);
         _unit.SelectedIndex = unit;
         _blocks.Checked = drawBlocks;
+        // Not remembered: each drawing says (or does not) which datum it is in.
+        _datum.Items.AddRange(["SIRGAS 2000 / WGS 84", "SAD 69 (desenhos antigos)"]);
+        _datum.SelectedIndex = 0;
 
         _layers.Columns.Add("Camada", 280);
         _layers.Columns.Add("Elementos", 90, HorizontalAlignment.Right);
@@ -80,7 +85,8 @@ internal sealed class DwgPage : Page
             .Add(Stack.Flow(_utm, new Label { Text = "Zona:", AutoSize = true, Margin = new Padding(0, 7, 6, 0) }, _zone,
                 new Label { Text = "Hemisfério:", AutoSize = true, Margin = new Padding(12, 7, 6, 0) }, _hemisphere), bottom: 2)
             .Add(_degrees, bottom: 6)
-            .Add(Stack.Flow(new Label { Text = "O desenho está em:", AutoSize = true, Margin = new Padding(0, 7, 6, 0) }, _unit), bottom: 4)
+            .Add(Stack.Flow(new Label { Text = "O desenho está em:", AutoSize = true, Margin = new Padding(0, 7, 6, 0) }, _unit,
+                new Label { Text = "Datum:", AutoSize = true, Margin = new Padding(12, 7, 6, 0) }, _datum), bottom: 4)
             .Add(Ui.Hint("Para o Brasil: São Paulo e a maior parte do Sudeste ficam na zona 23 Sul; o Rio Grande do Sul, na 22; " +
                          "o Nordeste, entre 23 e 25. Se o desenho cair no lugar errado, troque a zona."), bottom: 8)
             .Add(_where, bottom: 8)
@@ -110,6 +116,11 @@ internal sealed class DwgPage : Page
         _hemisphere.SelectedIndexChanged += (_, _) => OptionsChanged();
         _unit.SelectedIndexChanged += (_, _) => OptionsChanged();
         _blocks.CheckedChanged += (_, _) => OptionsChanged();
+        _datum.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_loading)
+                ShowPlace();
+        };
         _layers.ItemChecked += (_, _) =>
         {
             if (!_loading)
@@ -134,7 +145,7 @@ internal sealed class DwgPage : Page
     };
 
     private CadGeoSettings Settings => new(_degrees.Checked, ZoneNumber, _hemisphere.SelectedIndex == 0,
-        UnitScales[Math.Max(0, _unit.SelectedIndex)], _blocks.Checked);
+        UnitScales[Math.Max(0, _unit.SelectedIndex)], _blocks.Checked, _datum.SelectedIndex == 1);
 
     private HashSet<string> CheckedLayers =>
         [.. _layers.CheckedItems.Cast<ListViewItem>().Select(i => (string)i.Tag!)];
@@ -205,6 +216,10 @@ internal sealed class DwgPage : Page
         _drawing = drawing;
         _drop.SetFile(Path.GetFileName(path), $"{drawing.Version} · {drawing.Model.Count:N0} elementos");
         _openOutput.Enabled = _showOutput.Enabled = false;
+        _saysSad69 = drawing.MentionsSad69();
+        _loading = true;
+        _datum.SelectedIndex = _saysSad69 ? 1 : 0;
+        _loading = false;
         FillLayers();
     }
 
@@ -239,9 +254,14 @@ internal sealed class DwgPage : Page
         var layers = CheckedLayers;
         var settings = Settings;
         double minX = double.MaxValue, maxX = double.MinValue, minY = double.MaxValue, maxY = double.MinValue;
+        var centers = new Dictionary<string, CadPoint?>(StringComparer.OrdinalIgnoreCase);
         foreach (var entity in _drawing.Model.Where(e => layers.Contains(e.Layer)))
         {
-            foreach (var p in entity.Points)
+            // Block references count where they show on the map, which is not always where they are inserted.
+            IReadOnlyList<CadPoint> points = entity.Kind == CadKind.Insert
+                ? [CadMapBuilder.MarkerOf(_drawing, settings, entity, centers)]
+                : entity.Points;
+            foreach (var p in points)
             {
                 minX = Math.Min(minX, p.X);
                 maxX = Math.Max(maxX, p.X);
@@ -256,9 +276,7 @@ internal sealed class DwgPage : Page
             return;
         }
 
-        (double Lat, double Lon) At(double x, double y) => settings.Degrees
-            ? (y * settings.UnitScale, x * settings.UnitScale)
-            : Utm.ToLatLon(settings.Zone, settings.South, x * settings.UnitScale, y * settings.UnitScale);
+        (double Lat, double Lon) At(double x, double y) => CadMapBuilder.ToLatLon(settings, x, y);
         var (lat, lon) = At((minX + maxX) / 2, (minY + maxY) / 2);
         var (lat1, lon1) = At(minX, minY);
         var (lat2, lon2) = At(maxX, maxY);
@@ -278,6 +296,9 @@ internal sealed class DwgPage : Page
                 _where.ForeColor = Ui.Bad;
                 text += " Isso é grande demais para um projeto de rede: confira a unidade do desenho.";
             }
+            if (_saysSad69)
+                text += " A moldura do desenho indica o datum antigo (SAD 69 / Chuá)" +
+                        (settings.Sad69 ? ", já selecionado." : ": sem selecioná-lo, o mapa fica uns 60 m fora do lugar.");
             _where.Text = text;
         }
         ShowSummary();
@@ -293,7 +314,7 @@ internal sealed class DwgPage : Page
         }
         var notes = new List<string>();
         if (_drawing.Skipped > 0)
-            notes.Add($"{_drawing.Skipped:N0} elemento(s) de tipos que o programa ainda não desenha (hachuras, cotas, sólidos 3D) ficam de fora.");
+            notes.Add($"{_drawing.Skipped:N0} elemento(s) de tipos que o programa ainda não desenha (hachuras, cotas, chamadas com seta, sólidos 3D) ficam de fora.");
         if (_drawing.Unreadable > 0)
             notes.Add($"{_drawing.Unreadable:N0} objeto(s) do arquivo não puderam ser lidos.");
         _summary.Text = string.Join("\n", notes);

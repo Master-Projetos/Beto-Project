@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace ListaMateriais.Cad;
 
 /// <summary>A point of a drawing, in the drawing's own units.</summary>
@@ -31,6 +33,12 @@ internal sealed class CadEntity
     /// <summary>For an insert: the name of the block it draws.</summary>
     public string Block { get; set; } = string.Empty;
 
+    /// <summary>
+    /// For an insert: the values filled in this reference of the block (the number of a box, its capacity...), by
+    /// tag, in the order of the file. Empty values are left out.
+    /// </summary>
+    public List<(string Tag, string Value)> Attributes { get; } = [];
+
     public double Rotation { get; set; }
 
     public double ScaleX { get; set; } = 1;
@@ -42,9 +50,23 @@ internal sealed class CadEntity
 internal sealed record CadLayer(string Name, int ColorIndex, int? Rgb, bool Hidden);
 
 /// <summary>What was read from a DWG or DXF file.</summary>
-internal sealed class CadDrawing
+internal sealed partial class CadDrawing
 {
+    /// <summary>"SAD-69", or the datum named after its origin, Chuá, as drawing frames write it.</summary>
+    [GeneratedRegex(@"SAD[\s\-]?69|DATUM.*CHU[AÁ]\b", RegexOptions.IgnoreCase)]
+    private static partial Regex Sad69Text();
+
+    /// <summary>True when some text of the drawing (usually its frame) says it is in SAD 69.</summary>
+    public bool MentionsSad69() =>
+        Model.Concat(Blocks.Values.SelectMany(b => b))
+            .SelectMany(e => e.Attributes.Select(a => a.Value).Prepend(e.Text))
+            .Concat(SheetTexts)
+            .Any(text => text.Length > 0 && Sad69Text().IsMatch(text));
+
     public List<CadEntity> Model { get; } = [];
+
+    /// <summary>Texts of the print layouts (paper space): not part of the map, but where the frame often is.</summary>
+    public List<string> SheetTexts { get; } = [];
 
     /// <summary>Block definitions by name (case-insensitive); their points are relative to the block's origin.</summary>
     public Dictionary<string, List<CadEntity>> Blocks { get; } = new(StringComparer.OrdinalIgnoreCase);
