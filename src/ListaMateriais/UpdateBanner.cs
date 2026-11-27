@@ -63,6 +63,23 @@ internal sealed class UpdateBanner : Panel
         }
     }
 
+    /// <summary>The new version is already in place here: failing to open it is not a failed update.</summary>
+    private void Restart()
+    {
+        try
+        {
+            Updater.Restart();
+        }
+#pragma warning disable CA1031 // Whatever the reason, the user only has to open the program again.
+        catch (Exception e)
+#pragma warning restore CA1031
+        {
+            Trace.TraceError("Falha ao abrir a versão nova: {0}", e);
+            _text.Text = "Atualização instalada. Feche e abra o programa.";
+            _install.Visible = _later.Visible = false;
+        }
+    }
+
     private void Offer(UpdateInfo update)
     {
         _update = update;
@@ -87,7 +104,7 @@ internal sealed class UpdateBanner : Panel
             await Updater.InstallAsync(update, progress);
             _text.Text = "Pronto. Abrindo a versão nova...";
             Installing = false;
-            Updater.Restart();
+            Restart();
         }
         catch (AppException e)
         {

@@ -23,7 +23,7 @@ internal sealed class SpreadsheetPage : Page
     };
     private readonly ListView _paint = new()
     {
-        View = View.Details, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.Nonclickable, MultiSelect = false,
+        View = View.Details, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.Nonclickable, MultiSelect = true,
         Height = 110, ShowItemToolTips = true,
     };
     private readonly Button _addPaint = Ui.Secondary(new Button { Text = "+ Adicionar pintura", AutoSize = true, Enabled = false, Padding = new Padding(8, 2, 8, 2) });
@@ -352,7 +352,9 @@ internal sealed class SpreadsheetPage : Page
         var index = Selected;
         if (_busy || index < 0)
             return;
-        _rules.RemoveAt(index);
+        // From the bottom up, so the positions still to remove do not move.
+        foreach (var selected in _paint.SelectedIndices.Cast<int>().OrderDescending().ToList())
+            _rules.RemoveAt(selected);
         ShowRules(Math.Min(index, _rules.Count - 1));
         Preview();
     }
@@ -393,7 +395,8 @@ internal sealed class SpreadsheetPage : Page
     {
         var ready = !_busy && _workbook is not null;
         _addPaint.Enabled = ready && _columns.Count > 0;
-        _editPaint.Enabled = _removePaint.Enabled = ready && Selected >= 0;
+        _editPaint.Enabled = ready && _paint.SelectedIndices.Count == 1;
+        _removePaint.Enabled = ready && Selected >= 0;
         _save.Enabled = ready;
     }
 

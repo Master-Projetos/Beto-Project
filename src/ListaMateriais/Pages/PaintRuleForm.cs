@@ -42,7 +42,7 @@ internal sealed class PaintRuleForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = Ui.BodyFont;
         BackColor = Color.White;
-        ClientSize = new Size(700, 560);
+        ClientSize = new Size(820, 560);
         MinimumSize = new Size(560, 460);
         StartPosition = FormStartPosition.CenterParent;
         ShowInTaskbar = false;

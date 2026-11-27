@@ -180,6 +180,19 @@ public sealed class WorkbookTests : IDisposable
     }
 
     [Fact]
+    public void Several_picked_values_paint_all_their_rows_at_once()
+    {
+        var (op, value) = Pages.FilterRuleControls.Combine(["Lavras", "Betim"])!.Value;
+
+        var result = Workbook.Open(Build(("Vendas", Sales)))
+            .Plan(new Job(["Vendas"], [new PaintRule(["Cidade"], Yellow, [new Condition("Cidade", op, value)])], []));
+
+        Assert.Equal(3, result.Sheets[0].PaintedCells);
+        Assert.Equal(("É igual a", "Betim"), Pages.FilterRuleControls.Combine(["Betim"]));
+        Assert.Null(Pages.FilterRuleControls.Combine(["a;b", "c"]));
+    }
+
+    [Fact]
     public void A_filter_that_matches_nothing_hides_nothing()
     {
         var result = Workbook.Open(Build(("Vendas", Sales))).Plan(new Job(["Vendas"], [], [City("Nenhuma")]));

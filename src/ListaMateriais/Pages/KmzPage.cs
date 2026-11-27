@@ -448,7 +448,7 @@ internal sealed class KmzPage : Page
             _filterGrid.Controls.Add(i == 0 ? rule.Lead : rule.Join, 1, i + 1);
             _filterGrid.Controls.Add(rule.Column, 2, i + 1);
             _filterGrid.Controls.Add(rule.Operator, 3, i + 1);
-            _filterGrid.Controls.Add(rule.Value, 4, i + 1);
+            _filterGrid.Controls.Add(rule.ValueCell, 4, i + 1);
             _filterGrid.Controls.Add(rule.Remove, 5, i + 1);
         }
         for (var row = 0; row < _filterGrid.RowCount; row++)

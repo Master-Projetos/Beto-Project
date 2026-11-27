@@ -8,6 +8,7 @@ internal static class DwgReader
 {
     // Object type numbers of the DWG format.
     private const int TypeText = 1;
+    private const int TypeAttribute = 2;
     private const int TypeBlock = 4;
     private const int TypeInsert = 7;
     private const int TypeVertex2D = 10;
@@ -290,6 +291,7 @@ internal static class DwgReader
         public CadEntity? Entity;
         public bool IsPolyline;
         public bool IsVertex;
+        public string? Tag;
         public int VertexFlag;
         public double Bulge;
         public ulong[] Owned = [];
@@ -347,7 +349,7 @@ internal static class DwgReader
         var wanted = type switch
         {
             TypeLayer or TypeBlockHeader => true,
-            TypeText or TypeInsert or TypeVertex2D or TypeVertex3D or TypePolyline2D or TypePolyline3D or TypeArc or TypeCircle
+            TypeText or TypeAttribute or TypeInsert or TypeVertex2D or TypeVertex3D or TypePolyline2D or TypePolyline3D or TypeArc or TypeCircle
                 or TypeLine or TypePoint or TypeEllipse or TypeSpline or TypeMText => true,
             _ => false,
         };
@@ -416,6 +418,9 @@ internal static class DwgReader
             ReadVertex3D(obj, raw);
         if (entity is not null)
             raw.Entity = entity;
+        // An attribute is a text followed by its tag; it is attached to its block reference when everything was read.
+        if (type == TypeAttribute)
+            raw.Tag = obj.Text().Trim();
         ReadCommonHandles(obj, common, raw);
         ReadSpecificHandles(obj, type, raw);
 
@@ -431,14 +436,15 @@ internal static class DwgReader
     private static bool IsDrawingEntity(int type, string? className) =>
         type switch
         {
-            2 or 3 or 8 => true,
+            8 or 78 => true,               // 3D minsert, hatch
             >= 20 and <= 26 => true,       // dimensions
             28 or 29 or 30 or 31 or 32 or 33 => true,
             37 or 38 or 39 or 40 or 41 => true,
             45 or 46 or 47 => true,
             >= 500 => className is not null && !string.Equals(className, "LWPOLYLINE", StringComparison.OrdinalIgnoreCase)
                 && (className.Equals("HATCH", StringComparison.OrdinalIgnoreCase) || className.Equals("IMAGE", StringComparison.OrdinalIgnoreCase)
-                    || className.Equals("MLEADER", StringComparison.OrdinalIgnoreCase) || className.Equals("WIPEOUT", StringComparison.OrdinalIgnoreCase)
+                    || className.Equals("MLEADER", StringComparison.OrdinalIgnoreCase)
+                    || className.Equals("MULTILEADER", StringComparison.OrdinalIgnoreCase) || className.Equals("WIPEOUT", StringComparison.OrdinalIgnoreCase)
                     || className.Equals("3DSOLID", StringComparison.OrdinalIgnoreCase) || className.Contains("DIMENSION", StringComparison.OrdinalIgnoreCase)),
             _ => false,
         };
@@ -711,7 +717,7 @@ internal static class DwgReader
                 point.Points.Add(new CadPoint(x, y));
                 return point;
             }
-            case TypeText:
+            case TypeText or TypeAttribute:
                 return ReadText(o);
             case TypeMText:
             {
@@ -1027,9 +1033,11 @@ internal static class DwgReader
         foreach (var r in state.Entities)
             byHandle.TryAdd(r.Handle, r);
 
+        var attributesByOwner = state.Entities.Where(r => r.Tag is not null).ToLookup(r => r.Owner);
+
         foreach (var raw in state.Entities)
         {
-            if (raw.IsVertex || raw.Entity is null)
+            if (raw.IsVertex || raw.Tag is not null || raw.Entity is null)
                 continue;
             var entity = raw.Entity;
             if (raw.IsPolyline)
@@ -1042,10 +1050,17 @@ internal static class DwgReader
                 BuildPolyline(entity, vertices, raw);
             }
             if (entity.Kind == CadKind.Insert)
+            {
                 entity.Block = state.BlockNames.TryGetValue(raw.BlockHandle, out var blockName) ? blockName : string.Empty;
+                entity.Attributes.AddRange(attributesByOwner[raw.Handle].OrderBy(a => a.Handle)
+                    .Where(a => a.Entity is { Text.Length: > 0 }).Select(a => (a.Tag!, a.Entity!.Text)));
+            }
             entity.Layer = state.Layers.TryGetValue(raw.LayerHandle, out var layer) ? layer.Name : "0";
             if (entity.Kind == CadKind.Path && entity.Points.Count < 2)
                 continue;
+
+            if (entity.Kind == CadKind.Text && (raw.EntMode == 1 || (raw.EntMode == 0 && paperHandles.Contains(raw.Owner))))
+                drawing.SheetTexts.Add(entity.Text);
 
             if (raw.EntMode == 2 || (raw.EntMode == 0 && raw.Owner == modelHandle && modelHandle != 0))
             {

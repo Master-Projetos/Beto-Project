@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -18,6 +19,9 @@ internal sealed record UpdateInfo(Version Version, Uri Download, long Size, stri
 /// Windows does not let a running executable be overwritten, but it does let it be renamed: the new
 /// file is downloaded next to it, the running one is renamed to ".old", the new one takes its name,
 /// and the app restarts. The ".old" file is deleted on the next start.
+/// The published app is a single file, and its libraries are read from it, by its path, the first time
+/// each one is used: once the new file takes that path nothing else can be loaded, so everything is
+/// loaded before the swap.
 /// </remarks>
 internal static class Updater
 {
@@ -51,11 +55,29 @@ internal static class Updater
         && !Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
         && !File.Exists(Path.ChangeExtension(exe, ".dll"));
 
-    /// <summary>Deletes what a previous update left behind: the old executable and an unfinished download.</summary>
+    /// <summary>
+    /// Deletes what a previous update left behind: the old executable and an unfinished download. Right
+    /// after an update the old copy is still closing, so it keeps trying for a while in the background.
+    /// </summary>
     public static void CleanUp()
     {
-        if (!CanUpdateItself || Executable is not { } exe)
+        if (!CanUpdateItself || Executable is not { } exe || DeleteLeftovers(exe))
             return;
+        _ = Task.Run(async () =>
+        {
+            for (var attempt = 0; attempt < 20; attempt++)
+            {
+                await Task.Delay(500).ConfigureAwait(false);
+                if (DeleteLeftovers(exe))
+                    return;
+            }
+        });
+    }
+
+    /// <summary>False when something is still in use.</summary>
+    private static bool DeleteLeftovers(string exe)
+    {
+        var done = true;
         foreach (var leftover in new[] { exe + ".old", exe + ".new" })
         {
             try
@@ -65,8 +87,34 @@ internal static class Updater
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                // The old process may still be closing; the next start tries again.
+                // The old process may still be closing.
                 Trace.TraceWarning("Não foi possível apagar {0}: {1}", leftover, e.Message);
+                done = false;
+            }
+        }
+        return done;
+    }
+
+    /// <summary>Loads every library the app refers to, directly or through another one.</summary>
+    private static void LoadLibraries()
+    {
+        var pending = new Stack<Assembly>(AppDomain.CurrentDomain.GetAssemblies());
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        while (pending.TryPop(out var assembly))
+        {
+            foreach (var name in assembly.GetReferencedAssemblies())
+            {
+                if (!seen.Add(name.FullName))
+                    continue;
+                try
+                {
+                    pending.Push(Assembly.Load(name));
+                }
+                catch (Exception e) when (e is IOException or BadImageFormatException)
+                {
+                    // Some references are to libraries that are not shipped, and are never used.
+                    Trace.TraceInformation("Biblioteca não carregada: {0}: {1}", name.Name, e.Message);
+                }
             }
         }
     }
@@ -159,6 +207,7 @@ internal static class Updater
             await Download(update, download, progress, cancel).ConfigureAwait(false);
             if (File.Exists(old))
                 File.Delete(old);
+            LoadLibraries();
             File.Move(exe, old);
             try
             {

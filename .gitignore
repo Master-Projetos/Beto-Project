@@ -29,3 +29,8 @@ Desktop.ini
 # Presentations (client branding and data)
 *.pptx
 *.ppt
+
+# Client drawings and generated maps
+*.dwg
+*.dxf
+*.kmz
